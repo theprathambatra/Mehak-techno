@@ -487,6 +487,31 @@ export default function Home() {
     [],
   );
 
+  useEffect(() => {
+    const handleSpotifyRateLimit = (event: Event) => {
+      const detail = (
+        event as CustomEvent<{ retryAfterSeconds?: number }>
+      ).detail;
+      const seconds = Math.max(1, Math.ceil(detail?.retryAfterSeconds ?? 1));
+      const message = `SPOTIFY COOL-DOWN ${seconds}S · SCAN RESUMES AUTOMATICALLY`;
+      setPlayerMessage(message);
+      setCatalogProgress((progress) => {
+        const next = { ...progress };
+        loadingCatalogsRef.current.forEach((key) => {
+          next[key] = message;
+        });
+        return next;
+      });
+    };
+
+    window.addEventListener("mehak:spotify-rate-limit", handleSpotifyRateLimit);
+    return () =>
+      window.removeEventListener(
+        "mehak:spotify-rate-limit",
+        handleSpotifyRateLimit,
+      );
+  }, []);
+
   const ensureCatalog = useCallback(async (key: ArtistKey) => {
     const existing = catalogsRef.current[key];
     if (existing?.length) return existing;
@@ -502,19 +527,21 @@ export default function Home() {
 
     try {
       const loaded = await fetchArtistCatalog(selected, (scan) => {
+        const message =
+          scan.phase === "cache"
+            ? "ARCHIVE RESTORED"
+            : scan.phase === "releases"
+              ? `FINDING RELEASES ${compactNumber(scan.completed)}/${compactNumber(scan.total)}`
+              : `CUTTING VINYL ${compactNumber(scan.completed)}/${compactNumber(scan.total)}`;
         setArtistProgress((progress) => ({
           ...progress,
           [key]: Math.max(progress[key] ?? 0, scan.percent),
         }));
         setCatalogProgress((progress) => ({
           ...progress,
-          [key]:
-            scan.phase === "cache"
-              ? "ARCHIVE RESTORED"
-              : scan.phase === "releases"
-                ? `FINDING RELEASES ${compactNumber(scan.completed)}/${compactNumber(scan.total)}`
-                : `CUTTING VINYL ${compactNumber(scan.completed)}/${compactNumber(scan.total)}`,
+          [key]: message,
         }));
+        setPlayerMessage(message);
       });
       const nextCatalogs = { ...catalogsRef.current, [key]: loaded };
       catalogsRef.current = nextCatalogs;
@@ -550,9 +577,11 @@ export default function Home() {
   useEffect(() => {
     if (!authenticated) return;
 
-    void Promise.all(
-      SPOTIFY_ARTISTS.map((item) => ensureCatalog(item.key)),
-    );
+    void (async () => {
+      for (const item of SPOTIFY_ARTISTS) {
+        await ensureCatalog(item.key);
+      }
+    })();
   }, [authenticated, ensureCatalog]);
 
   useEffect(() => {
