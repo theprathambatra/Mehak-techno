@@ -897,6 +897,10 @@ export default function Home() {
   };
 
   const enterExperience = async () => {
+    setPartyProgress(0);
+    setPartyOverlayDismissed(false);
+    setAutoLaunchAttempted(false);
+    autoPartyLaunchRef.current = false;
     setEntered(true);
     void videoRef.current?.play();
     if (!weatherRequestedRef.current) requestWeather();
@@ -905,8 +909,12 @@ export default function Home() {
       await beginSpotifyAuthorization(selectedArtist);
       return;
     }
-    if (authenticated && playerReady && activeCatalog.length) {
-      await playQueueAt(currentTrack, selectedArtist);
+    if (authenticated && playerRef.current) {
+      try {
+        await playerRef.current.activateElement();
+      } catch {
+        // The full-screen countdown retains a tap fallback for strict browsers.
+      }
     }
   };
 
@@ -1256,17 +1264,22 @@ export default function Home() {
       : catalogProgress[selectedArtist] ?? playerMessage;
   const autoplayNeedsTap =
     autoLaunchAttempted &&
-    /PRESS PLAY|ANOTHER TAP|AUTOPLAY/.test(playerMessage.toUpperCase());
+    /PRESS PLAY|ANOTHER TAP|AUTOPLAY|PLAYBACK|PLAYER COMMAND|RESTRICTION|FAILED|ERROR/.test(
+      playerMessage.toUpperCase(),
+    );
   const partyLabel =
     partyProgress < 100
       ? "COUNTDOWN TO THE PARTY"
       : spotifyPlaying
         ? "PARTY ONLINE"
         : autoplayNeedsTap
-          ? "TAP JUKEBOX PLAY TO DROP THE NEEDLE"
+          ? "ONE TAP TO START THE PARTY"
           : "DROPPING THE NEEDLE";
   const showPartyCountdown =
-    entered && authenticated && !partyOverlayDismissed && !auditMode;
+    entered &&
+    (authenticated || authChecking) &&
+    !partyOverlayDismissed &&
+    !auditMode;
   const displayTitle = track?.title ?? `${artist.name} FULL ARCHIVE`;
   const displayArtist = track?.artists ?? "ALL UNIQUE CREDITED TRACKS";
   const displayAlbum = track
@@ -1357,14 +1370,16 @@ export default function Home() {
 
       {showPartyCountdown ? (
         <div
-          className={`party-countdown${partyProgress >= 100 ? " is-ready" : ""}`}
+          className={`party-countdown${partyProgress >= 100 ? " is-ready" : ""}${
+            spotifyPlaying ? " is-revealing" : ""
+          }`}
           role="status"
           aria-live="polite"
         >
           <div className="party-countdown-topline">
             <span>{partyLabel}</span>
             <strong>
-              {partyProgress}
+              {compactNumber(partyProgress)}
               <small>%</small>
             </strong>
           </div>
@@ -1378,6 +1393,15 @@ export default function Home() {
             </span>
             <span>SOLOMUN {Math.round(solomunPartyProgress)}%</span>
           </div>
+          {autoplayNeedsTap ? (
+            <button
+              className="party-start-button"
+              type="button"
+              onClick={() => void togglePlayback()}
+            >
+              START THE PARTY
+            </button>
+          ) : null}
         </div>
       ) : null}
 
