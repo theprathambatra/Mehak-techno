@@ -740,6 +740,86 @@ button {
   font-style: normal;
 }
 
+.artist-switcher {
+  position: relative;
+  z-index: 3;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+  padding: 8px 4px;
+  border-bottom: 1px solid rgba(244, 241, 233, 0.12);
+}
+
+.artist-switcher button {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+  min-height: 35px;
+  padding: 0 11px;
+  overflow: hidden;
+  border: 1px solid rgba(244, 241, 233, 0.12);
+  border-radius: 999px;
+  color: rgba(244, 241, 233, 0.62);
+  background: rgba(244, 241, 233, 0.025);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  cursor: pointer;
+  transition:
+    color 220ms ease,
+    border-color 220ms ease,
+    background 220ms ease,
+    transform 220ms ease;
+}
+
+.artist-switcher button::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(105deg, rgba(255, 47, 155, 0.16), rgba(37, 244, 255, 0.08), rgba(216, 255, 53, 0.13));
+  opacity: 0;
+  transition: opacity 220ms ease;
+}
+
+.artist-switcher button:hover,
+.artist-switcher button:focus-visible {
+  border-color: rgba(244, 241, 233, 0.32);
+  color: var(--paper);
+  outline: none;
+  transform: translateY(-1px);
+}
+
+.artist-switcher button.is-active {
+  border-color: rgba(216, 255, 53, 0.5);
+  color: #090909;
+  background: var(--acid);
+  box-shadow: 0 0 20px rgba(216, 255, 53, 0.09);
+}
+
+.artist-switcher button.is-active::before {
+  opacity: 0.2;
+}
+
+.artist-switcher button > * {
+  position: relative;
+  z-index: 1;
+}
+
+.artist-switcher button span {
+  font-size: 10.5px;
+  font-weight: 760;
+  letter-spacing: 0.12em;
+}
+
+.artist-switcher button small {
+  overflow: hidden;
+  font-size: 7.5px;
+  font-weight: 650;
+  letter-spacing: 0.07em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .jukebox-body {
   display: grid;
   grid-template-columns: 148px minmax(0, 1fr);
@@ -909,6 +989,18 @@ button {
   text-overflow: ellipsis;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
+}
+
+.track-readout h2 a {
+  color: inherit;
+  text-decoration: none;
+  transition: color 180ms ease;
+}
+
+.track-readout h2 a:hover,
+.track-readout h2 a:focus-visible {
+  color: var(--acid);
+  outline: none;
 }
 
 .track-readout > p {
@@ -1115,6 +1207,14 @@ button {
   transform: scale(0.96);
 }
 
+.playback-button.needs-login {
+  color: #050506;
+  background: #1ed760;
+  box-shadow:
+    0 0 0 6px rgba(30, 215, 96, 0.1),
+    0 0 30px rgba(30, 215, 96, 0.22);
+}
+
 .play-glyph {
   width: 0;
   height: 0;
@@ -1154,6 +1254,14 @@ button {
   display: flex;
   align-items: center;
   gap: 7px;
+  min-width: 0;
+}
+
+.jukebox-status {
+  max-width: 175px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .online-dot {
@@ -1174,6 +1282,24 @@ button {
   color: var(--paper);
   text-decoration: none;
   transition: color 220ms ease;
+}
+
+.spotify-attribution {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 7px;
+}
+
+.spotify-mark {
+  display: inline-block;
+  width: 21px;
+  height: 21px;
+  flex: 0 0 21px;
+  border-radius: 50%;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: contain;
 }
 
 .jukebox-footer a:hover,
@@ -1615,6 +1741,24 @@ button {
     padding: 0 3px 8px;
   }
 
+  .artist-switcher {
+    gap: 6px;
+    padding: 6px 2px;
+  }
+
+  .artist-switcher button {
+    min-height: 31px;
+    padding-inline: 9px;
+  }
+
+  .artist-switcher button span {
+    font-size: 9px;
+  }
+
+  .artist-switcher button small {
+    font-size: 6.5px;
+  }
+
   .jukebox-body {
     grid-template-columns: 116px minmax(0, 1fr);
     gap: 13px;
@@ -1681,6 +1825,15 @@ button {
     min-height: 34px;
     padding-top: 9px;
     font-size: 8px;
+  }
+
+  .jukebox-status {
+    max-width: 128px;
+  }
+
+  .spotify-mark {
+    width: 21px;
+    height: 21px;
   }
 }
 
@@ -1761,6 +1914,14 @@ button {
 
   .track-count {
     font-size: 13px;
+  }
+
+  .artist-switcher button {
+    padding-inline: 8px;
+  }
+
+  .artist-switcher button small {
+    max-width: 58px;
   }
 
   .jukebox-body {
