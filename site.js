@@ -1,47 +1,16 @@
-const playlistTracks = [
-  {
-    title: "Vois sur ton chemin",
-    mix: "TECHNO MIX",
-    artist: "BENNETT",
-    uri: "spotify:track:31nfdEooLEq7dn3UMcIeB5",
-    duration: 178,
-  },
-  {
-    title: "Bla Bla Bla",
-    mix: "CLUB CUT",
-    artist: "ILYAA",
-    uri: "spotify:track:4d8rAz6gWPJ5Vq516k2kac",
-    duration: 118,
-  },
-  {
-    title: "Push Up",
-    mix: "MAIN EDIT",
-    artist: "CREEDS",
-    uri: "spotify:track:3AjSfp5FDvwtMU9XBsbS8j",
-    duration: 139,
-  },
-  {
-    title: "Rockafeller Skank",
-    mix: "RAVE EDIT",
-    artist: "ILYAA",
-    uri: "spotify:track:2CeMzUrbykkE7QWA3qlXvx",
-    duration: 145,
-  },
-  {
-    title: "Thank You (Not So Bad)",
-    mix: "TECHNO CUT",
-    artist: "DIMITRI VEGAS · TIËSTO · DIDO · W&W",
-    uri: "spotify:track:09CnYHiZ5jGT1wr1TXJ9Zt",
-    duration: 140,
-  },
-  {
-    title: "Self Aware",
-    mix: "2026 MIX",
-    artist: "ILYAA · ROBBE · DIVERZION",
-    uri: "spotify:track:1zgmIvxibz0QHVDq19zqSR",
-    duration: 144,
-  },
-];
+import {
+  beginSpotifyAuthorization,
+  clearPendingRoom,
+  clearSpotifySession,
+  completeSpotifyAuthorization,
+  fetchArtistCatalog,
+  getSpotifyAccessToken,
+  SPOTIFY_ARTISTS,
+  spotifyApi,
+  wasRoomPending,
+} from "./spotify.js";
+
+const PLAYBACK_BATCH_SIZE = 50;
 
 const weatherLabels = {
   0: "CLEAR SKY",
@@ -95,9 +64,11 @@ const signalCopy = document.getElementById("signal-copy");
 const laserButton = document.getElementById("laser-button");
 const laserShow = document.getElementById("laser-show");
 const record = document.getElementById("record");
+const recordLabel = document.getElementById("record-label");
 const tonearm = document.getElementById("tonearm");
 const trackNumber = document.getElementById("track-number");
-const trackTitle = document.getElementById("track-title");
+const trackTotal = document.getElementById("track-total");
+const trackLink = document.getElementById("track-link");
 const trackMeta = document.getElementById("track-meta");
 const nowPlayingLabel = document.getElementById("now-playing-label");
 const progressFill = document.getElementById("progress-fill");
@@ -110,16 +81,39 @@ const playbackGlyph = document.getElementById("playback-glyph");
 const nextButton = document.getElementById("next-button");
 const onlineDot = document.getElementById("online-dot");
 const jukeboxStatus = document.getElementById("jukebox-status");
+const spotifyLink = document.getElementById("spotify-link");
+const artistButtons = Array.from(
+  document.querySelectorAll(".artist-switcher button[data-artist]"),
+);
 
-let spotifyController = null;
-let spotifyReady = false;
+let authenticated = false;
+let authChecking = true;
+let spotifyPlayer = null;
+let playerReady = false;
 let spotifyPlaying = false;
-let requestedPlayback = false;
-let weatherRequested = false;
+let deviceId = "";
+let selectedArtist =
+  sessionStorage.getItem("mehak_spotify_selected_artist") === "solomun"
+    ? "solomun"
+    : "artbat";
+let playingArtist = selectedArtist;
+let catalogs = {};
+let catalogProgress = {};
+let loadingCatalogs = new Set();
 let currentTrack = 0;
 let progressMs = 0;
-let durationMs = playlistTracks[0].duration * 1000;
+let durationMs = 0;
+let progressAnchor = { at: 0, position: 0 };
+let previousState = null;
+let queueEnd = -1;
+let autoAdvancing = false;
+let weatherRequested = false;
 let activeTimeZone;
+let playerMessage = "CONNECTING TO SPOTIFY";
+let spotifySdkPromise;
+
+const compactNumber = (value) =>
+  String(value).padStart(value > 99 ? 3 : 2, "0");
 
 const formatTime = (milliseconds) => {
   const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000));
@@ -127,6 +121,13 @@ const formatTime = (milliseconds) => {
   const seconds = totalSeconds % 60;
   return `${minutes}:${seconds.toString().padStart(2, "0")}`;
 };
+
+const getArtist = (key = selectedArtist) =>
+  SPOTIFY_ARTISTS.find((artist) => artist.key === key);
+
+const getCatalog = (key = selectedArtist) => catalogs[key] ?? [];
+
+const getTrack = () => getCatalog()[currentTrack];
 
 const updateClock = () => {
   const now = new Date();
@@ -149,6 +150,15 @@ const updateClock = () => {
   }).format(now);
 };
 
+const setStatus = (message) => {
+  playerMessage = message;
+  const shown = authenticated
+    ? catalogProgress[selectedArtist] ?? playerMessage
+    : playerMessage;
+  jukeboxStatus.textContent = shown;
+  jukeboxStatus.title = shown;
+};
+
 const setPlaying = (playing) => {
   spotifyPlaying = playing;
   experience.classList.toggle("is-playing", playing);
@@ -156,104 +166,383 @@ const setPlaying = (playing) => {
   record.classList.toggle("is-spinning", playing);
   tonearm.classList.toggle("is-playing", playing);
   equalizer.classList.toggle("is-moving", playing);
-  nowPlayingLabel.textContent = playing ? "NOW SPINNING" : "READY TO SPIN";
-  signalCopy.textContent = playing
-    ? "JUKEBOX LIVE"
-    : spotifyReady
-      ? "ROOM READY"
-      : "TUNING IN";
   playbackGlyph.className = playing ? "pause-glyph" : "play-glyph";
   playbackButton.setAttribute(
     "aria-label",
-    playing ? "Pause jukebox" : "Play jukebox",
+    !authenticated
+      ? "Connect Spotify Premium"
+      : playing
+        ? "Pause jukebox"
+        : "Play jukebox",
   );
+  signalCopy.textContent = playing
+    ? "JUKEBOX LIVE"
+    : playerReady
+      ? "ROOM READY"
+      : authenticated
+        ? "TUNING IN"
+        : "SPOTIFY LOGIN";
+};
+
+const renderArtistTabs = () => {
+  artistButtons.forEach((button) => {
+    const key = button.dataset.artist;
+    const active = key === selectedArtist;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-selected", String(active));
+    const count = button.querySelector("small");
+    if (!count) return;
+    count.textContent = catalogs[key]?.length
+      ? `${catalogs[key].length} TRACKS`
+      : authenticated
+        ? "LOADING"
+        : "CONNECT";
+  });
 };
 
 const renderTrack = () => {
-  const track = playlistTracks[currentTrack];
-  trackNumber.textContent = String(currentTrack + 1).padStart(2, "0");
-  trackTitle.textContent = track.title;
+  const artist = getArtist();
+  const catalog = getCatalog();
+  const track = catalog[currentTrack];
+  const displayTitle = track?.title ?? `${artist.name} FULL ARCHIVE`;
+  const displayArtist = track?.artists ?? "ALL UNIQUE CREDITED TRACKS";
+  const displayAlbum = track
+    ? `${track.album} · ${track.releaseDate.slice(0, 4)}`
+    : "OLDEST TO NEWEST · FULL-LENGTH PLAYBACK";
+
+  recordLabel.textContent = artist.name.slice(0, 1);
+  trackNumber.textContent = catalog.length ? compactNumber(currentTrack + 1) : "--";
+  trackTotal.textContent = catalog.length ? compactNumber(catalog.length) : "--";
+  trackLink.textContent = displayTitle;
+  trackLink.href = track?.spotifyUrl ?? artist.url;
+  spotifyLink.href = track?.spotifyUrl ?? artist.url;
+  trackMeta.title = `${displayArtist} · ${displayAlbum}`;
   trackMeta.replaceChildren(
-    document.createTextNode(`${track.artist} `),
+    document.createTextNode(`${displayArtist} `),
     Object.assign(document.createElement("span"), { textContent: "·" }),
-    document.createTextNode(` ${track.mix}`),
+    document.createTextNode(` ${displayAlbum}`),
   );
-  durationTime.textContent = formatTime(durationMs);
+  nowPlayingLabel.textContent = spotifyPlaying
+    ? "NOW SPINNING · FULL TRACK"
+    : !authenticated
+      ? "PREMIUM PLAYER · LOGIN ONCE"
+      : catalog.length
+        ? "READY · COMPLETE CATALOG"
+        : "BUILDING THE ARCHIVE";
   elapsedTime.textContent = formatTime(progressMs);
+  durationTime.textContent = formatTime(durationMs || track?.durationMs || 0);
   progressFill.style.width = `${Math.min(
     100,
     (progressMs / Math.max(1, durationMs)) * 100,
   )}%`;
+  previousButton.disabled = !playerReady || !catalog.length;
+  nextButton.disabled = !playerReady || !catalog.length;
+  playbackButton.disabled = authChecking || (authenticated && !playerReady);
+  playbackButton.classList.toggle("needs-login", !authenticated);
+  onlineDot.classList.toggle("is-waiting", !playerReady || !catalog.length);
+  renderArtistTabs();
+  setStatus(playerMessage);
 };
 
-const setSpotifyReady = () => {
-  spotifyReady = true;
-  previousButton.disabled = false;
-  playbackButton.disabled = false;
-  nextButton.disabled = false;
-  onlineDot.classList.remove("is-waiting");
-  jukeboxStatus.textContent = "JUKEBOX ONLINE";
-  signalCopy.textContent = spotifyPlaying ? "JUKEBOX LIVE" : "ROOM READY";
+const loadSpotifySdk = () => {
+  if (window.Spotify) return Promise.resolve(window.Spotify);
+  if (spotifySdkPromise) return spotifySdkPromise;
+
+  spotifySdkPromise = new Promise((resolve, reject) => {
+    const timeout = window.setTimeout(
+      () => reject(new Error("Spotify player took too long to load")),
+      12000,
+    );
+    const previousReady = window.onSpotifyWebPlaybackSDKReady;
+    window.onSpotifyWebPlaybackSDKReady = () => {
+      previousReady?.();
+      window.clearTimeout(timeout);
+      if (window.Spotify) resolve(window.Spotify);
+      else reject(new Error("Spotify player did not initialize"));
+    };
+
+    if (!document.querySelector("script[data-spotify-player]")) {
+      const script = document.createElement("script");
+      script.src = "https://sdk.scdn.co/spotify-player.js";
+      script.async = true;
+      script.dataset.spotifyPlayer = "true";
+      script.onerror = () => {
+        window.clearTimeout(timeout);
+        spotifySdkPromise = null;
+        reject(new Error("Spotify player is offline"));
+      };
+      document.body.appendChild(script);
+    }
+  });
+
+  return spotifySdkPromise;
 };
 
-window.onSpotifyIframeApiReady = (IFrameAPI) => {
-  const mount = document.getElementById("spotify-embed");
-  if (!mount) return;
+const ensureCatalog = async (key) => {
+  if (catalogs[key]?.length) return catalogs[key];
+  if (loadingCatalogs.has(key)) return null;
 
-  IFrameAPI.createController(
-    mount,
-    { width: "100%", height: 152, uri: playlistTracks[0].uri },
-    (controller) => {
-      spotifyController = controller;
-
-      controller.addListener("ready", () => {
-        setSpotifyReady();
-        if (requestedPlayback) controller.play();
-      });
-
-      controller.addListener("playback_started", (event) => {
-        setPlaying(true);
-        const activeUri = event.data?.playingURI;
-        const trackIndex = playlistTracks.findIndex(
-          (track) => track.uri === activeUri,
-        );
-        if (trackIndex >= 0) {
-          currentTrack = trackIndex;
-          durationMs = playlistTracks[trackIndex].duration * 1000;
-          renderTrack();
-        }
-      });
-
-      controller.addListener("playback_update", (event) => {
-        if (typeof event.data?.isPaused === "boolean") {
-          setPlaying(!event.data.isPaused);
-        }
-        if (typeof event.data?.position === "number") {
-          progressMs = event.data.position;
-        }
-        if (
-          typeof event.data?.duration === "number" &&
-          event.data.duration > 0
-        ) {
-          durationMs = event.data.duration;
-        }
-        renderTrack();
-      });
-    },
-  );
-};
-
-const loadTrack = (index) => {
-  currentTrack = (index + playlistTracks.length) % playlistTracks.length;
-  const track = playlistTracks[currentTrack];
-  progressMs = 0;
-  durationMs = track.duration * 1000;
-  requestedPlayback = true;
+  const artist = getArtist(key);
+  loadingCatalogs.add(key);
+  catalogProgress[key] = `SCANNING ${artist.name} RELEASES`;
   renderTrack();
 
-  if (!spotifyController) return;
-  spotifyController.loadEntity(track.uri);
-  window.setTimeout(() => spotifyController?.play(), 180);
+  try {
+    const tracks = await fetchArtistCatalog(artist, (done, total) => {
+      catalogProgress[key] =
+        `SCANNING RELEASES ${compactNumber(done)}/${compactNumber(total)}`;
+      if (selectedArtist === key) renderTrack();
+    });
+    catalogs = { ...catalogs, [key]: tracks };
+    catalogProgress[key] = `${tracks.length} TRACKS READY`;
+    if (selectedArtist === key) {
+      durationMs = tracks[0]?.durationMs ?? 0;
+      setStatus(
+        spotifyPlayer
+          ? `${tracks.length} TRACKS · PRESS PLAY`
+          : `${tracks.length} TRACKS · STARTING PLAYER`,
+      );
+    }
+    renderTrack();
+    return tracks;
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message.toUpperCase() : "CATALOG OFFLINE";
+    catalogProgress[key] = message;
+    setStatus(message);
+    if (/SESSION|CONNECT/.test(message)) {
+      authenticated = false;
+      playerReady = false;
+    }
+    renderTrack();
+    return null;
+  } finally {
+    loadingCatalogs.delete(key);
+  }
+};
+
+const playQueueAt = async (requestedIndex, requestedArtist = selectedArtist) => {
+  let catalog = getCatalog(requestedArtist);
+
+  if (!authenticated) {
+    await beginSpotifyAuthorization(requestedArtist);
+    return;
+  }
+  if (!catalog.length) catalog = (await ensureCatalog(requestedArtist)) ?? [];
+  if (!catalog.length) return;
+  if (!spotifyPlayer || !deviceId) {
+    setStatus("PLAYER IS STILL WARMING UP");
+    return;
+  }
+
+  const index = (requestedIndex + catalog.length) % catalog.length;
+  const batch = catalog.slice(index, index + PLAYBACK_BATCH_SIZE);
+
+  try {
+    await spotifyPlayer.activateElement();
+    setStatus("DROPPING THE NEEDLE");
+    playingArtist = requestedArtist;
+    queueEnd = index + batch.length - 1;
+    currentTrack = index;
+    progressMs = 0;
+    durationMs = catalog[index].durationMs;
+    renderTrack();
+
+    await spotifyApi(
+      `https://api.spotify.com/v1/me/player/play?device_id=${encodeURIComponent(deviceId)}`,
+      {
+        method: "PUT",
+        body: JSON.stringify({
+          position_ms: 0,
+          uris: batch.map((track) => track.uri),
+        }),
+      },
+    );
+
+    void Promise.allSettled([
+      spotifyApi(
+        `https://api.spotify.com/v1/me/player/shuffle?state=false&device_id=${encodeURIComponent(deviceId)}`,
+        { method: "PUT" },
+      ),
+      spotifyApi(
+        `https://api.spotify.com/v1/me/player/repeat?state=off&device_id=${encodeURIComponent(deviceId)}`,
+        { method: "PUT" },
+      ),
+    ]);
+  } catch (error) {
+    setPlaying(false);
+    setStatus(
+      error instanceof Error
+        ? error.message.toUpperCase()
+        : "PLAYBACK NEEDS ANOTHER TAP",
+    );
+  }
+};
+
+const initializePlayer = async () => {
+  try {
+    const Spotify = await loadSpotifySdk();
+    spotifyPlayer = new Spotify.Player({
+      name: "MAC's Private Listening Room",
+      enableMediaSession: true,
+      volume: 0.82,
+      getOAuthToken: (callback) => {
+        void getSpotifyAccessToken()
+          .then(callback)
+          .catch(() => {
+            clearSpotifySession();
+            authenticated = false;
+            playerReady = false;
+            setStatus("SESSION EXPIRED · CONNECT AGAIN");
+            renderTrack();
+          });
+      },
+    });
+
+    spotifyPlayer.addListener("ready", ({ device_id: readyDeviceId }) => {
+      deviceId = readyDeviceId;
+      playerReady = true;
+      const count = getCatalog().length;
+      setStatus(count ? `${count} TRACKS · PRESS PLAY` : "PLAYER READY · BUILDING ARCHIVE");
+      renderTrack();
+    });
+
+    spotifyPlayer.addListener("not_ready", () => {
+      playerReady = false;
+      setPlaying(false);
+      setStatus("PLAYER RECONNECTING");
+      renderTrack();
+    });
+
+    spotifyPlayer.addListener("player_state_changed", (state) => {
+      if (!state) return;
+      const catalog = getCatalog(playingArtist);
+      const index = catalog.findIndex(
+        (track) => track.uri === state.track_window.current_track.uri,
+      );
+
+      if (index >= 0 && selectedArtist === playingArtist) {
+        currentTrack = index;
+        progressMs = state.position;
+        durationMs = state.duration;
+        progressAnchor = { at: performance.now(), position: state.position };
+        setPlaying(!state.paused);
+        setStatus(
+          state.paused
+            ? `${catalog.length} TRACKS · PAUSED`
+            : `${catalog.length} TRACKS · PLAYING IN ORDER`,
+        );
+
+        const endedBatch =
+          state.paused &&
+          index === queueEnd &&
+          index < catalog.length - 1 &&
+          previousState?.track_window.current_track.uri ===
+            state.track_window.current_track.uri &&
+          previousState.position > Math.max(0, previousState.duration - 1800);
+
+        if (endedBatch && !autoAdvancing) {
+          autoAdvancing = true;
+          window.setTimeout(() => {
+            void playQueueAt(index + 1, playingArtist).finally(() => {
+              autoAdvancing = false;
+            });
+          }, 120);
+        }
+        renderTrack();
+      }
+
+      previousState = state;
+    });
+
+    spotifyPlayer.addListener("autoplay_failed", () => {
+      setPlaying(false);
+      setStatus("PRESS PLAY TO START THE ROOM");
+      renderTrack();
+    });
+
+    spotifyPlayer.addListener("account_error", () => {
+      playerReady = false;
+      setPlaying(false);
+      setStatus("SPOTIFY PREMIUM IS REQUIRED");
+      renderTrack();
+    });
+
+    spotifyPlayer.addListener("authentication_error", () => {
+      clearSpotifySession();
+      authenticated = false;
+      playerReady = false;
+      setPlaying(false);
+      setStatus("SESSION EXPIRED · CONNECT AGAIN");
+      renderTrack();
+    });
+
+    spotifyPlayer.addListener("initialization_error", () => {
+      playerReady = false;
+      setStatus("THIS BROWSER CANNOT START SPOTIFY");
+      renderTrack();
+    });
+
+    spotifyPlayer.addListener("playback_error", ({ message }) => {
+      setPlaying(false);
+      setStatus((message ?? "PLAYBACK NEEDS ANOTHER TAP").toUpperCase());
+      renderTrack();
+    });
+
+    await spotifyPlayer.connect();
+  } catch (error) {
+    playerReady = false;
+    setStatus(
+      error instanceof Error ? error.message.toUpperCase() : "PLAYER OFFLINE",
+    );
+    renderTrack();
+  }
+};
+
+const selectArtist = (key) => {
+  if (key === selectedArtist) return;
+  void spotifyPlayer?.pause();
+  setPlaying(false);
+  selectedArtist = key;
+  sessionStorage.setItem("mehak_spotify_selected_artist", key);
+  currentTrack = 0;
+  progressMs = 0;
+  durationMs = getCatalog(key)[0]?.durationMs ?? 0;
+  previousState = null;
+  const count = getCatalog(key).length;
+  setStatus(
+    count ? `${count} TRACKS · PRESS PLAY` : `BUILDING ${key.toUpperCase()} ARCHIVE`,
+  );
+  renderTrack();
+  if (authenticated) void ensureCatalog(key);
+};
+
+const togglePlayback = async () => {
+  if (!authenticated) {
+    await beginSpotifyAuthorization(selectedArtist);
+    return;
+  }
+  if (!playerReady || !spotifyPlayer) {
+    setStatus("PLAYER IS STILL WARMING UP");
+    return;
+  }
+
+  await spotifyPlayer.activateElement();
+  if (spotifyPlaying) {
+    await spotifyPlayer.pause();
+    setPlaying(false);
+    renderTrack();
+    return;
+  }
+
+  if (
+    playingArtist === selectedArtist &&
+    previousState?.track_window.current_track.uri === getTrack()?.uri
+  ) {
+    await spotifyPlayer.resume();
+  } else {
+    await playQueueAt(currentTrack, selectedArtist);
+  }
 };
 
 const requestWeather = () => {
@@ -344,43 +633,49 @@ const shootLasers = () => {
 
 window.setTimeout(() => {
   enterButton.classList.add("is-ready");
-  enterButton.disabled = false;
-  enterButton.setAttribute("aria-busy", "false");
+  enterButton.disabled = authChecking;
+  enterButton.setAttribute("aria-busy", String(authChecking));
 }, 520);
 
-window.setTimeout(() => {
-  if (!spotifyReady) {
-    jukeboxStatus.textContent = "OPEN SPOTIFY TO LISTEN";
-  }
-}, 6500);
-
 window.setInterval(updateClock, 1000);
-updateClock();
-renderTrack();
+window.setInterval(() => {
+  if (!spotifyPlaying) return;
+  progressMs = Math.min(
+    durationMs,
+    progressAnchor.position + performance.now() - progressAnchor.at,
+  );
+  elapsedTime.textContent = formatTime(progressMs);
+  progressFill.style.width = `${Math.min(
+    100,
+    (progressMs / Math.max(1, durationMs)) * 100,
+  )}%`;
+}, 250);
 
-enterButton.addEventListener("click", () => {
-  requestedPlayback = true;
+enterButton.addEventListener("click", async () => {
   experience.classList.add("is-live");
   entryGate.classList.add("is-open");
-  spiralVideo.play().catch(() => {});
-  spotifyController?.play();
+  await spiralVideo.play().catch(() => {});
   if (!weatherRequested) requestWeather();
-});
 
-playbackButton.addEventListener("click", () => {
-  if (!spotifyController) return;
-  requestedPlayback = true;
-  if (spotifyPlaying) {
-    spotifyController.pause();
-    setPlaying(false);
-  } else {
-    spotifyController.resume();
-    setPlaying(true);
+  if (!authenticated && !authChecking) {
+    await beginSpotifyAuthorization(selectedArtist);
+    return;
+  }
+  if (authenticated && playerReady && getCatalog().length) {
+    await playQueueAt(currentTrack, selectedArtist);
   }
 });
 
-previousButton.addEventListener("click", () => loadTrack(currentTrack - 1));
-nextButton.addEventListener("click", () => loadTrack(currentTrack + 1));
+playbackButton.addEventListener("click", () => void togglePlayback());
+previousButton.addEventListener("click", () =>
+  void playQueueAt(currentTrack - 1, selectedArtist),
+);
+nextButton.addEventListener("click", () =>
+  void playQueueAt(currentTrack + 1, selectedArtist),
+);
+artistButtons.forEach((button) =>
+  button.addEventListener("click", () => selectArtist(button.dataset.artist)),
+);
 environmentStrip.addEventListener("click", requestWeather);
 laserButton.addEventListener("click", shootLasers);
 
@@ -418,3 +713,44 @@ experience.addEventListener("pointerleave", () => {
   experience.style.setProperty("--tilt-x", "0deg");
   experience.style.setProperty("--tilt-y", "0deg");
 });
+
+const initialize = async () => {
+  updateClock();
+  renderTrack();
+
+  if (wasRoomPending()) {
+    experience.classList.add("is-live");
+    entryGate.classList.add("is-open");
+    clearPendingRoom();
+    void spiralVideo.play().catch(() => {});
+    if (!weatherRequested) requestWeather();
+  }
+
+  try {
+    authenticated = await completeSpotifyAuthorization();
+    setStatus(
+      authenticated ? "LOADING FULL ARTIST ARCHIVES" : "CONNECT PREMIUM SPOTIFY",
+    );
+  } catch (error) {
+    authenticated = false;
+    setStatus(
+      error instanceof Error ? error.message.toUpperCase() : "SPOTIFY LOGIN FAILED",
+    );
+  } finally {
+    authChecking = false;
+    enterButton.disabled = false;
+    enterButton.setAttribute("aria-busy", "false");
+    renderTrack();
+  }
+
+  if (!authenticated) return;
+
+  void initializePlayer();
+  await ensureCatalog(selectedArtist);
+  const otherArtist = SPOTIFY_ARTISTS.find(
+    (artist) => artist.key !== selectedArtist,
+  );
+  if (otherArtist) void ensureCatalog(otherArtist.key);
+};
+
+void initialize();

@@ -69,7 +69,7 @@
 
         <p class="signal-label">
           <span class="signal" id="signal"></span>
-          <span id="signal-copy">TUNING IN</span>
+          <span id="signal-copy">SPOTIFY LOGIN</span>
         </p>
       </header>
 
@@ -102,11 +102,33 @@
           <div class="jukebox-header">
             <div>
               <span>MEHAK'S JUKEBOX</span>
-              <p>HANDPICKED FROM THE TECHNO PLAYLIST</p>
+              <p>COMPLETE ARTIST ARCHIVES · PLAYED WITH SPOTIFY</p>
             </div>
             <span class="track-count">
-              <span id="track-number">01</span><i>/</i>06
+              <span id="track-number">--</span><i>/</i><span id="track-total">--</span>
             </span>
+          </div>
+
+          <div class="artist-switcher" role="tablist" aria-label="Choose artist archive">
+            <button
+              class="is-active"
+              id="artbat-button"
+              type="button"
+              role="tab"
+              aria-selected="true"
+              data-artist="artbat"
+            >
+              <span>ARTBAT</span><small id="artbat-count">CONNECT</small>
+            </button>
+            <button
+              id="solomun-button"
+              type="button"
+              role="tab"
+              aria-selected="false"
+              data-artist="solomun"
+            >
+              <span>SOLOMUN</span><small id="solomun-count">CONNECT</small>
+            </button>
           </div>
 
           <div class="jukebox-body">
@@ -114,22 +136,22 @@
               <div class="record" id="record">
                 <span class="record-groove groove-one"></span>
                 <span class="record-groove groove-two"></span>
-                <span class="record-label">M</span>
+                <span class="record-label" id="record-label">A</span>
               </div>
               <div class="tonearm" id="tonearm"><span></span></div>
             </div>
 
             <div class="track-readout" aria-live="polite">
-              <span class="now-playing-label" id="now-playing-label">READY TO SPIN</span>
-              <h2 id="track-title">Vois sur ton chemin</h2>
-              <p id="track-meta">BENNETT <span>·</span> TECHNO MIX</p>
+              <span class="now-playing-label" id="now-playing-label">PREMIUM PLAYER · LOGIN ONCE</span>
+              <h2><a id="track-link" href="https://open.spotify.com/artist/3BkRu2TGd2I1uBxZKddfg1" target="_blank" rel="noreferrer">ARTBAT FULL ARCHIVE</a></h2>
+              <p id="track-meta">ALL UNIQUE CREDITED TRACKS <span>·</span> OLDEST TO NEWEST · FULL-LENGTH PLAYBACK</p>
 
               <div class="progress-rail" aria-hidden="true">
                 <span id="progress-fill" style="width: 0%"></span>
               </div>
               <div class="time-row">
                 <span id="elapsed-time">0:00</span>
-                <span id="duration-time">2:58</span>
+                <span id="duration-time">0:00</span>
               </div>
 
               <div class="equalizer" id="equalizer">
@@ -167,8 +189,7 @@
               type="button"
               class="playback-button"
               id="playback-button"
-              disabled
-              aria-label="Play jukebox"
+              aria-label="Connect Spotify Premium"
             >
               <span class="play-glyph" id="playback-glyph" aria-hidden="true"><i></i><i></i></span>
             </button>
@@ -188,18 +209,19 @@
           <div class="jukebox-footer">
             <span>
               <i class="online-dot is-waiting" id="online-dot"></i>
-              <span id="jukebox-status">TUNING JUKEBOX</span>
+              <span class="jukebox-status" id="jukebox-status">CONNECT PREMIUM SPOTIFY</span>
             </span>
             <a
-              href="https://open.spotify.com/playlist/18vUeZ9BdtMRNV6gI8RnR6"
+              class="spotify-attribution"
+              id="spotify-link"
+              href="https://open.spotify.com/artist/3BkRu2TGd2I1uBxZKddfg1"
               target="_blank"
               rel="noreferrer"
             >
-              FULL PLAYLIST ON SPOTIFY <span aria-hidden="true">↗</span>
+              <span class="spotify-mark" aria-hidden="true"></span>
+              PLAY ON SPOTIFY <span aria-hidden="true">↗</span>
             </a>
           </div>
-
-          <div id="spotify-embed" class="spotify-engine" aria-hidden="true"></div>
         </section>
       </div>
 
@@ -219,12 +241,11 @@
           <span class="play-word">PLAY</span>
         </button>
         <p class="gate-note">
-          ONE CLICK OPENS THE ROOM <span aria-hidden="true">·</span> SOUND ON
+          PLAY OPENS THE ROOM <span aria-hidden="true">·</span> PREMIUM SPOTIFY
         </p>
       </div>
     </main>
 
-    <script src="./site.js"></script>
-    <script src="https://open.spotify.com/embed/iframe-api/v1" async></script>
+    <script type="module" src="./site.js"></script>
   </body>
 </html>

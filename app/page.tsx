@@ -1,58 +1,33 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type {
   CSSProperties,
   PointerEvent as ReactPointerEvent,
 } from "react";
+import {
+  beginSpotifyAuthorization,
+  CatalogTrack,
+  clearPendingRoom,
+  clearSpotifySession,
+  completeSpotifyAuthorization,
+  fetchArtistCatalog,
+  getSpotifyAccessToken,
+  SPOTIFY_ARTISTS,
+  spotifyApi,
+  wasRoomPending,
+} from "./spotify";
+import type { ArtistKey } from "./spotify";
 
-const PLAYLIST_URL =
-  "https://open.spotify.com/playlist/18vUeZ9BdtMRNV6gI8RnR6";
-
-const JUKEBOX_TRACKS = [
-  {
-    title: "Vois sur ton chemin",
-    mix: "Techno Mix",
-    artist: "BENNETT",
-    uri: "spotify:track:31nfdEooLEq7dn3UMcIeB5",
-    duration: 178,
-  },
-  {
-    title: "Bla Bla Bla",
-    mix: "Club Cut",
-    artist: "ILYAA",
-    uri: "spotify:track:4d8rAz6gWPJ5Vq516k2kac",
-    duration: 118,
-  },
-  {
-    title: "Push Up",
-    mix: "Main Edit",
-    artist: "CREEDS",
-    uri: "spotify:track:3AjSfp5FDvwtMU9XBsbS8j",
-    duration: 139,
-  },
-  {
-    title: "Rockafeller Skank",
-    mix: "Rave Edit",
-    artist: "ILYAA",
-    uri: "spotify:track:2CeMzUrbykkE7QWA3qlXvx",
-    duration: 145,
-  },
-  {
-    title: "Thank You (Not So Bad)",
-    mix: "Techno Cut",
-    artist: "DIMITRI VEGAS · TIËSTO · DIDO · W&W",
-    uri: "spotify:track:09CnYHiZ5jGT1wr1TXJ9Zt",
-    duration: 140,
-  },
-  {
-    title: "Self Aware",
-    mix: "2026 Mix",
-    artist: "ILYAA · ROBBE · DIVERZION",
-    uri: "spotify:track:1zgmIvxibz0QHVDq19zqSR",
-    duration: 144,
-  },
-] as const;
+const PLAYBACK_BATCH_SIZE = 50;
+const SPOTIFY_MARK =
+  "https://open.spotifycdn.com/cdn/images/favicon32.b64ecc03.png";
 
 const LASER_BEAMS = [
   ["5%", "66deg", "0ms", "#ff2f9b", "64vh"],
@@ -93,37 +68,91 @@ const WEATHER_LABELS: Record<number, string> = {
   99: "STORM + HAIL",
 };
 
-type SpotifyEvent = {
-  data?: {
-    duration?: number;
-    isPaused?: boolean;
-    playingURI?: string;
-    position?: number;
+type SpotifyWebPlaybackTrack = {
+  album: { name: string };
+  artists: Array<{ name: string; uri: string }>;
+  name: string;
+  uri: string;
+};
+
+type SpotifyWebPlaybackState = {
+  duration: number;
+  paused: boolean;
+  position: number;
+  track_window: {
+    current_track: SpotifyWebPlaybackTrack;
+    next_tracks: SpotifyWebPlaybackTrack[];
+    previous_tracks: SpotifyWebPlaybackTrack[];
   };
 };
 
-type SpotifyController = {
-  addListener: (event: string, callback: (event: SpotifyEvent) => void) => void;
-  destroy?: () => void;
-  loadEntity: (spotifyUriOrUrl: string) => void;
-  pause: () => void;
-  play: () => void;
-  resume: () => void;
+type SpotifyPlayer = {
+  activateElement: () => Promise<void>;
+  addListener: (event: string, callback: (payload: unknown) => void) => boolean;
+  connect: () => Promise<boolean>;
+  disconnect: () => void;
+  pause: () => Promise<void>;
+  resume: () => Promise<void>;
 };
 
-type SpotifyIframeApi = {
-  createController: (
-    element: HTMLElement,
-    options: { height: number; uri: string; width: string },
-    callback: (controller: SpotifyController) => void,
-  ) => void;
+type SpotifySdk = {
+  Player: new (options: {
+    enableMediaSession: boolean;
+    getOAuthToken: (callback: (token: string) => void) => void;
+    name: string;
+    volume: number;
+  }) => SpotifyPlayer;
 };
+
+declare global {
+  interface Window {
+    onSpotifyWebPlaybackSDKReady?: () => void;
+    Spotify?: SpotifySdk;
+  }
+}
 
 type WeatherState = {
   label: string;
   temperature?: number;
   unit?: string;
 };
+
+let spotifySdkPromise: Promise<SpotifySdk> | null = null;
+
+function loadSpotifySdk() {
+  if (window.Spotify) return Promise.resolve(window.Spotify);
+  if (spotifySdkPromise) return spotifySdkPromise;
+
+  spotifySdkPromise = new Promise<SpotifySdk>((resolve, reject) => {
+    const timeout = window.setTimeout(
+      () => reject(new Error("Spotify player took too long to load")),
+      12_000,
+    );
+    const previousReady = window.onSpotifyWebPlaybackSDKReady;
+
+    window.onSpotifyWebPlaybackSDKReady = () => {
+      previousReady?.();
+      window.clearTimeout(timeout);
+      if (window.Spotify) resolve(window.Spotify);
+      else reject(new Error("Spotify player did not initialize"));
+    };
+
+    if (!document.querySelector("script[data-spotify-player]")) {
+      const script = document.createElement("script");
+      script.src = "https://sdk.scdn.co/spotify-player.js";
+      script.async = true;
+      script.dataset.spotifyPlayer = "true";
+      script.onerror = () => {
+        window.clearTimeout(timeout);
+        spotifySdkPromise = null;
+        reject(new Error("Spotify player is offline"));
+      };
+      document.body.appendChild(script);
+    }
+  });
+
+  return spotifySdkPromise;
+}
 
 function formatClock(timeZone?: string) {
   const now = new Date();
@@ -157,17 +186,34 @@ function formatTime(milliseconds: number) {
   return `${minutes}:${seconds.toString().padStart(2, "0")}`;
 }
 
+function compactNumber(value: number) {
+  return String(value).padStart(value > 99 ? 3 : 2, "0");
+}
+
 export default function Home() {
-  const [entered, setEntered] = useState(false);
+  const [entered, setEntered] = useState(
+    () => typeof window !== "undefined" && wasRoomPending(),
+  );
   const [gateReady, setGateReady] = useState(false);
-  const [spotifyReady, setSpotifyReady] = useState(false);
+  const [authenticated, setAuthenticated] = useState(false);
+  const [authChecking, setAuthChecking] = useState(true);
+  const [playerReady, setPlayerReady] = useState(false);
   const [spotifyPlaying, setSpotifyPlaying] = useState(false);
-  const [embedFallback, setEmbedFallback] = useState(false);
+  const [playerMessage, setPlayerMessage] = useState("CONNECTING TO SPOTIFY");
+  const [selectedArtist, setSelectedArtist] = useState<ArtistKey>(() => {
+    if (typeof window === "undefined") return "artbat";
+    const saved = sessionStorage.getItem("mehak_spotify_selected_artist");
+    return saved === "solomun" ? "solomun" : "artbat";
+  });
+  const [catalogs, setCatalogs] = useState<
+    Partial<Record<ArtistKey, CatalogTrack[]>>
+  >({});
+  const [catalogProgress, setCatalogProgress] = useState<
+    Partial<Record<ArtistKey, string>>
+  >({});
   const [currentTrack, setCurrentTrack] = useState(0);
   const [progressMs, setProgressMs] = useState(0);
-  const [durationMs, setDurationMs] = useState(
-    JUKEBOX_TRACKS[0].duration * 1000,
-  );
+  const [durationMs, setDurationMs] = useState(0);
   const [laserBurst, setLaserBurst] = useState(0);
   const [timeZone, setTimeZone] = useState<string>();
   const [clock, setClock] = useState({ date: "SYNCING DATE", time: "--:--:--" });
@@ -177,9 +223,52 @@ export default function Home() {
 
   const experienceRef = useRef<HTMLElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
-  const spotifyControllerRef = useRef<SpotifyController | null>(null);
-  const requestedPlaybackRef = useRef(false);
+  const playerRef = useRef<SpotifyPlayer | null>(null);
+  const deviceIdRef = useRef("");
+  const catalogsRef = useRef(catalogs);
+  const activeArtistRef = useRef<ArtistKey>(selectedArtist);
+  const playingArtistRef = useRef<ArtistKey>(selectedArtist);
+  const queueEndRef = useRef(-1);
+  const loadingCatalogsRef = useRef(new Set<ArtistKey>());
   const weatherRequestedRef = useRef(false);
+  const progressAnchorRef = useRef({ at: 0, position: 0 });
+  const durationRef = useRef(0);
+  const previousStateRef = useRef<SpotifyWebPlaybackState | null>(null);
+  const autoAdvanceRef = useRef(false);
+  const playAtRef = useRef<
+    ((index: number, artist?: ArtistKey) => Promise<void>) | null
+  >(null);
+
+  const artist = useMemo(
+    () => SPOTIFY_ARTISTS.find((item) => item.key === selectedArtist)!,
+    [selectedArtist],
+  );
+  const activeCatalog = catalogs[selectedArtist] ?? [];
+  const track = activeCatalog[currentTrack];
+
+  useEffect(() => {
+    const gateTimer = window.setTimeout(() => setGateReady(true), 520);
+    if (wasRoomPending()) {
+      clearPendingRoom();
+    }
+
+    void completeSpotifyAuthorization()
+      .then((connected) => {
+        setAuthenticated(connected);
+        setPlayerMessage(
+          connected ? "LOADING FULL ARTIST ARCHIVES" : "CONNECT PREMIUM SPOTIFY",
+        );
+      })
+      .catch((error: unknown) => {
+        setAuthenticated(false);
+        setPlayerMessage(
+          error instanceof Error ? error.message.toUpperCase() : "SPOTIFY LOGIN FAILED",
+        );
+      })
+      .finally(() => setAuthChecking(false));
+
+    return () => window.clearTimeout(gateTimer);
+  }, []);
 
   useEffect(() => {
     const updateClock = () => setClock(formatClock(timeZone));
@@ -188,87 +277,7 @@ export default function Home() {
     return () => window.clearInterval(clockTimer);
   }, [timeZone]);
 
-  useEffect(() => {
-    const gateTimer = window.setTimeout(() => setGateReady(true), 520);
-    let active = true;
-
-    const spotifyWindow = window as typeof window & {
-      onSpotifyIframeApiReady?: (api: SpotifyIframeApi) => void;
-    };
-
-    spotifyWindow.onSpotifyIframeApiReady = (IFrameAPI) => {
-      const element = document.getElementById("spotify-embed");
-      if (!active || !element) return;
-
-      IFrameAPI.createController(
-        element,
-        {
-          width: "100%",
-          height: 152,
-          uri: JUKEBOX_TRACKS[0].uri,
-        },
-        (controller) => {
-          if (!active) return;
-          spotifyControllerRef.current = controller;
-
-          controller.addListener("ready", () => {
-            setSpotifyReady(true);
-            setEmbedFallback(false);
-            if (requestedPlaybackRef.current) controller.play();
-          });
-
-          controller.addListener("playback_started", (event) => {
-            setSpotifyPlaying(true);
-            const activeUri = event.data?.playingURI;
-            const trackIndex = JUKEBOX_TRACKS.findIndex(
-              (track) => track.uri === activeUri,
-            );
-            if (trackIndex >= 0) {
-              setCurrentTrack(trackIndex);
-              setDurationMs(JUKEBOX_TRACKS[trackIndex].duration * 1000);
-            }
-          });
-
-          controller.addListener("playback_update", (event) => {
-            if (typeof event.data?.isPaused === "boolean") {
-              setSpotifyPlaying(!event.data.isPaused);
-            }
-            if (typeof event.data?.position === "number") {
-              setProgressMs(event.data.position);
-            }
-            if (
-              typeof event.data?.duration === "number" &&
-              event.data.duration > 0
-            ) {
-              setDurationMs(event.data.duration);
-            }
-          });
-        },
-      );
-    };
-
-    const script = document.createElement("script");
-    script.src = "https://open.spotify.com/embed/iframe-api/v1";
-    script.async = true;
-    script.dataset.spotifyApi = "true";
-    document.body.appendChild(script);
-
-    const fallbackTimer = window.setTimeout(() => {
-      if (!spotifyControllerRef.current) setEmbedFallback(true);
-    }, 6500);
-
-    return () => {
-      active = false;
-      window.clearTimeout(gateTimer);
-      window.clearTimeout(fallbackTimer);
-      spotifyControllerRef.current?.destroy?.();
-      spotifyControllerRef.current = null;
-      script.remove();
-      delete spotifyWindow.onSpotifyIframeApiReady;
-    };
-  }, []);
-
-  const requestWeather = () => {
+  const requestWeather = useCallback(() => {
     if (!navigator.geolocation) {
       setWeather({ label: "WEATHER UNAVAILABLE" });
       return;
@@ -313,43 +322,360 @@ export default function Home() {
       () => setWeather({ label: "TAP TO ENABLE WEATHER" }),
       { enableHighAccuracy: false, maximumAge: 600000, timeout: 10000 },
     );
-  };
+  }, []);
 
-  const enterExperience = () => {
-    requestedPlaybackRef.current = true;
-    setEntered(true);
+  useEffect(() => {
+    if (!entered) return;
     void videoRef.current?.play();
-    spotifyControllerRef.current?.play();
     if (!weatherRequestedRef.current) requestWeather();
-  };
+  }, [entered, requestWeather]);
 
-  const togglePlayback = () => {
-    const controller = spotifyControllerRef.current;
-    if (!controller) return;
-    requestedPlaybackRef.current = true;
+  const ensureCatalog = useCallback(async (key: ArtistKey) => {
+    const existing = catalogsRef.current[key];
+    if (existing?.length) return existing;
+    if (loadingCatalogsRef.current.has(key)) return null;
+
+    const selected = SPOTIFY_ARTISTS.find((item) => item.key === key)!;
+    loadingCatalogsRef.current.add(key);
+    setCatalogProgress((progress) => ({
+      ...progress,
+      [key]: `SCANNING ${selected.name} RELEASES`,
+    }));
+
+    try {
+      const loaded = await fetchArtistCatalog(selected, (done, total) => {
+        setCatalogProgress((progress) => ({
+          ...progress,
+          [key]: `SCANNING RELEASES ${compactNumber(done)}/${compactNumber(total)}`,
+        }));
+      });
+      const nextCatalogs = { ...catalogsRef.current, [key]: loaded };
+      catalogsRef.current = nextCatalogs;
+      setCatalogs(nextCatalogs);
+      setCatalogProgress((progress) => ({
+        ...progress,
+        [key]: `${loaded.length} TRACKS READY`,
+      }));
+      if (activeArtistRef.current === key) {
+        setPlayerMessage(
+          playerRef.current
+            ? `${loaded.length} TRACKS · PRESS PLAY`
+            : `${loaded.length} TRACKS · STARTING PLAYER`,
+        );
+      }
+      return loaded;
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message.toUpperCase() : "CATALOG OFFLINE";
+      setCatalogProgress((progress) => ({ ...progress, [key]: message }));
+      setPlayerMessage(message);
+      if (/SESSION|CONNECT/.test(message)) {
+        setAuthenticated(false);
+        setPlayerReady(false);
+      }
+      return null;
+    } finally {
+      loadingCatalogsRef.current.delete(key);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!authenticated) return;
+    let cancelled = false;
+
+    void (async () => {
+      await ensureCatalog(selectedArtist);
+      if (cancelled) return;
+      const other = SPOTIFY_ARTISTS.find((item) => item.key !== selectedArtist)!;
+      await ensureCatalog(other.key);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [authenticated, ensureCatalog, selectedArtist]);
+
+  useEffect(() => {
+    if (!authenticated) return;
+    let disposed = false;
+
+    void loadSpotifySdk()
+      .then((sdk) => {
+        if (disposed) return;
+        const player = new sdk.Player({
+          name: "MAC's Private Listening Room",
+          enableMediaSession: true,
+          volume: 0.82,
+          getOAuthToken: (callback) => {
+            void getSpotifyAccessToken()
+              .then(callback)
+              .catch(() => {
+                clearSpotifySession();
+                setAuthenticated(false);
+                setPlayerReady(false);
+                setPlayerMessage("SESSION EXPIRED · CONNECT AGAIN");
+              });
+          },
+        });
+
+        playerRef.current = player;
+
+        player.addListener("ready", (payload) => {
+          const deviceId = (payload as { device_id?: string })?.device_id;
+          if (!deviceId || disposed) return;
+          deviceIdRef.current = deviceId;
+          setPlayerReady(true);
+          const count = catalogsRef.current[activeArtistRef.current]?.length ?? 0;
+          setPlayerMessage(
+            count ? `${count} TRACKS · PRESS PLAY` : "PLAYER READY · BUILDING ARCHIVE",
+          );
+        });
+
+        player.addListener("not_ready", () => {
+          if (disposed) return;
+          setPlayerReady(false);
+          setSpotifyPlaying(false);
+          setPlayerMessage("PLAYER RECONNECTING");
+        });
+
+        player.addListener("player_state_changed", (payload) => {
+          if (disposed || !payload) return;
+          const state = payload as SpotifyWebPlaybackState;
+          const playingArtist = playingArtistRef.current;
+          const catalog = catalogsRef.current[playingArtist] ?? [];
+          const index = catalog.findIndex(
+            (item) => item.uri === state.track_window.current_track.uri,
+          );
+
+          if (index >= 0 && activeArtistRef.current === playingArtist) {
+            setCurrentTrack(index);
+            setDurationMs(state.duration);
+            durationRef.current = state.duration;
+            setProgressMs(state.position);
+            progressAnchorRef.current = {
+              at: performance.now(),
+              position: state.position,
+            };
+            setSpotifyPlaying(!state.paused);
+            setPlayerMessage(
+              state.paused
+                ? `${catalog.length} TRACKS · PAUSED`
+                : `${catalog.length} TRACKS · PLAYING IN ORDER`,
+            );
+
+            const previous = previousStateRef.current;
+            const endedBatch =
+              state.paused &&
+              index === queueEndRef.current &&
+              index < catalog.length - 1 &&
+              previous?.track_window.current_track.uri ===
+                state.track_window.current_track.uri &&
+              previous.position > Math.max(0, previous.duration - 1800);
+
+            if (endedBatch && !autoAdvanceRef.current) {
+              autoAdvanceRef.current = true;
+              window.setTimeout(() => {
+                void playAtRef.current?.(index + 1, playingArtist).finally(() => {
+                  autoAdvanceRef.current = false;
+                });
+              }, 120);
+            }
+          }
+
+          previousStateRef.current = state;
+        });
+
+        player.addListener("autoplay_failed", () => {
+          setSpotifyPlaying(false);
+          setPlayerMessage("PRESS PLAY TO START THE ROOM");
+        });
+
+        player.addListener("account_error", () => {
+          setSpotifyPlaying(false);
+          setPlayerReady(false);
+          setPlayerMessage("SPOTIFY PREMIUM IS REQUIRED");
+        });
+
+        player.addListener("authentication_error", () => {
+          clearSpotifySession();
+          setAuthenticated(false);
+          setPlayerReady(false);
+          setSpotifyPlaying(false);
+          setPlayerMessage("SESSION EXPIRED · CONNECT AGAIN");
+        });
+
+        player.addListener("initialization_error", () => {
+          setPlayerReady(false);
+          setPlayerMessage("THIS BROWSER CANNOT START SPOTIFY");
+        });
+
+        player.addListener("playback_error", (payload) => {
+          const message = (payload as { message?: string })?.message;
+          setSpotifyPlaying(false);
+          setPlayerMessage((message ?? "PLAYBACK NEEDS ANOTHER TAP").toUpperCase());
+        });
+
+        return player.connect();
+      })
+      .catch((error: unknown) => {
+        if (disposed) return;
+        setPlayerReady(false);
+        setPlayerMessage(
+          error instanceof Error ? error.message.toUpperCase() : "PLAYER OFFLINE",
+        );
+      });
+
+    return () => {
+      disposed = true;
+      playerRef.current?.disconnect();
+      playerRef.current = null;
+      deviceIdRef.current = "";
+      setPlayerReady(false);
+    };
+  }, [authenticated]);
+
+  useEffect(() => {
+    const ticker = window.setInterval(() => {
+      if (!spotifyPlaying) return;
+      const elapsed = performance.now() - progressAnchorRef.current.at;
+      setProgressMs(
+        Math.min(
+          durationRef.current,
+          progressAnchorRef.current.position + elapsed,
+        ),
+      );
+    }, 250);
+    return () => window.clearInterval(ticker);
+  }, [spotifyPlaying]);
+
+  const playQueueAt = useCallback(
+    async (requestedIndex: number, requestedArtist?: ArtistKey) => {
+      const key = requestedArtist ?? activeArtistRef.current;
+      let catalog = catalogsRef.current[key];
+
+      if (!authenticated) {
+        await beginSpotifyAuthorization(key);
+        return;
+      }
+      if (!catalog?.length) {
+        catalog = (await ensureCatalog(key)) ?? undefined;
+      }
+      if (!catalog?.length) return;
+      if (!playerRef.current || !deviceIdRef.current) {
+        setPlayerMessage("PLAYER IS STILL WARMING UP");
+        return;
+      }
+
+      const index = (requestedIndex + catalog.length) % catalog.length;
+      const batch = catalog.slice(index, index + PLAYBACK_BATCH_SIZE);
+      const deviceId = deviceIdRef.current;
+      const player = playerRef.current;
+
+      try {
+        await player.activateElement();
+        setPlayerMessage("DROPPING THE NEEDLE");
+        playingArtistRef.current = key;
+        queueEndRef.current = index + batch.length - 1;
+        setCurrentTrack(index);
+        setProgressMs(0);
+        setDurationMs(catalog[index].durationMs);
+        durationRef.current = catalog[index].durationMs;
+
+        await spotifyApi<void>(
+          `https://api.spotify.com/v1/me/player/play?device_id=${encodeURIComponent(deviceId)}`,
+          {
+            method: "PUT",
+            body: JSON.stringify({
+              position_ms: 0,
+              uris: batch.map((item) => item.uri),
+            }),
+          },
+        );
+
+        void Promise.allSettled([
+          spotifyApi<void>(
+            `https://api.spotify.com/v1/me/player/shuffle?state=false&device_id=${encodeURIComponent(deviceId)}`,
+            { method: "PUT" },
+          ),
+          spotifyApi<void>(
+            `https://api.spotify.com/v1/me/player/repeat?state=off&device_id=${encodeURIComponent(deviceId)}`,
+            { method: "PUT" },
+          ),
+        ]);
+      } catch (error) {
+        setSpotifyPlaying(false);
+        setPlayerMessage(
+          error instanceof Error
+            ? error.message.toUpperCase()
+            : "PLAYBACK NEEDS ANOTHER TAP",
+        );
+      }
+    },
+    [authenticated, ensureCatalog],
+  );
+
+  useEffect(() => {
+    playAtRef.current = playQueueAt;
+  }, [playQueueAt]);
+
+  const togglePlayback = async () => {
+    if (!authenticated) {
+      await beginSpotifyAuthorization(selectedArtist);
+      return;
+    }
+    if (!playerReady || !playerRef.current) {
+      setPlayerMessage("PLAYER IS STILL WARMING UP");
+      return;
+    }
+
+    await playerRef.current.activateElement();
     if (spotifyPlaying) {
-      controller.pause();
+      await playerRef.current.pause();
       setSpotifyPlaying(false);
+      return;
+    }
+
+    if (
+      playingArtistRef.current === selectedArtist &&
+      previousStateRef.current?.track_window.current_track.uri === track?.uri
+    ) {
+      await playerRef.current.resume();
     } else {
-      controller.resume();
-      setSpotifyPlaying(true);
+      await playQueueAt(currentTrack, selectedArtist);
     }
   };
 
-  const loadTrack = (index: number) => {
-    const normalizedIndex =
-      (index + JUKEBOX_TRACKS.length) % JUKEBOX_TRACKS.length;
-    const controller = spotifyControllerRef.current;
-    const track = JUKEBOX_TRACKS[normalizedIndex];
-
-    setCurrentTrack(normalizedIndex);
+  const selectArtist = (key: ArtistKey) => {
+    if (key === selectedArtist) return;
+    void playerRef.current?.pause();
+    setSpotifyPlaying(false);
+    setSelectedArtist(key);
+    activeArtistRef.current = key;
+    sessionStorage.setItem("mehak_spotify_selected_artist", key);
+    setCurrentTrack(0);
     setProgressMs(0);
-    setDurationMs(track.duration * 1000);
-    requestedPlaybackRef.current = true;
+    setDurationMs(catalogsRef.current[key]?.[0]?.durationMs ?? 0);
+    durationRef.current = catalogsRef.current[key]?.[0]?.durationMs ?? 0;
+    previousStateRef.current = null;
+    const count = catalogsRef.current[key]?.length ?? 0;
+    setPlayerMessage(
+      count ? `${count} TRACKS · PRESS PLAY` : `BUILDING ${key.toUpperCase()} ARCHIVE`,
+    );
+    if (authenticated) void ensureCatalog(key);
+  };
 
-    if (!controller) return;
-    controller.loadEntity(track.uri);
-    window.setTimeout(() => controller.play(), 180);
+  const enterExperience = async () => {
+    setEntered(true);
+    void videoRef.current?.play();
+    if (!weatherRequestedRef.current) requestWeather();
+
+    if (!authenticated && !authChecking) {
+      await beginSpotifyAuthorization(selectedArtist);
+      return;
+    }
+    if (authenticated && playerReady && activeCatalog.length) {
+      await playQueueAt(currentTrack, selectedArtist);
+    }
   };
 
   const playLaserSound = () => {
@@ -409,12 +735,22 @@ export default function Home() {
     experienceRef.current.style.setProperty("--hero-y-soft", "0px");
   };
 
-  const track = JUKEBOX_TRACKS[currentTrack];
   const progress = Math.min(100, (progressMs / Math.max(1, durationMs)) * 100);
   const weatherText =
     typeof weather.temperature === "number"
       ? `${Math.round(weather.temperature)}${weather.unit ?? "°C"} ${weather.label}`
       : weather.label;
+  const statusText = authChecking
+    ? "CHECKING SPOTIFY"
+    : !authenticated
+      ? playerMessage
+      : catalogProgress[selectedArtist] ?? playerMessage;
+  const displayTitle = track?.title ?? `${artist.name} FULL ARCHIVE`;
+  const displayArtist = track?.artists ?? "ALL UNIQUE CREDITED TRACKS";
+  const displayAlbum = track
+    ? `${track.album} · ${track.releaseDate.slice(0, 4)}`
+    : "OLDEST TO NEWEST · FULL-LENGTH PLAYBACK";
+  const playbackEnabled = !authChecking && (!authenticated || playerReady);
 
   return (
     <main
@@ -489,9 +825,11 @@ export default function Home() {
           <span className={spotifyPlaying ? "signal is-playing" : "signal"} />
           {spotifyPlaying
             ? "JUKEBOX LIVE"
-            : spotifyReady
+            : playerReady
               ? "ROOM READY"
-              : "TUNING IN"}
+              : authenticated
+                ? "TUNING IN"
+                : "SPOTIFY LOGIN"}
         </p>
       </header>
 
@@ -532,13 +870,35 @@ export default function Home() {
           <div className="jukebox-header">
             <div>
               <span>MEHAK&apos;S JUKEBOX</span>
-              <p>HANDPICKED FROM THE TECHNO PLAYLIST</p>
+              <p>COMPLETE ARTIST ARCHIVES · PLAYED WITH SPOTIFY</p>
             </div>
-            <span className="track-count">
-              {String(currentTrack + 1).padStart(2, "0")}
+            <span className="track-count" aria-label="Current track and total tracks">
+              {activeCatalog.length ? compactNumber(currentTrack + 1) : "--"}
               <i>/</i>
-              {String(JUKEBOX_TRACKS.length).padStart(2, "0")}
+              {activeCatalog.length ? compactNumber(activeCatalog.length) : "--"}
             </span>
+          </div>
+
+          <div className="artist-switcher" role="tablist" aria-label="Choose artist archive">
+            {SPOTIFY_ARTISTS.map((item) => (
+              <button
+                key={item.key}
+                type="button"
+                role="tab"
+                aria-selected={selectedArtist === item.key}
+                className={selectedArtist === item.key ? "is-active" : ""}
+                onClick={() => selectArtist(item.key)}
+              >
+                <span>{item.name}</span>
+                <small>
+                  {catalogs[item.key]?.length
+                    ? `${catalogs[item.key]!.length} TRACKS`
+                    : authenticated
+                      ? "LOADING"
+                      : "CONNECT"}
+                </small>
+              </button>
+            ))}
           </div>
 
           <div className="jukebox-body">
@@ -546,7 +906,7 @@ export default function Home() {
               <div className={spotifyPlaying ? "record is-spinning" : "record"}>
                 <span className="record-groove groove-one" />
                 <span className="record-groove groove-two" />
-                <span className="record-label">M</span>
+                <span className="record-label">{artist.name.slice(0, 1)}</span>
               </div>
               <div className={spotifyPlaying ? "tonearm is-playing" : "tonearm"}>
                 <span />
@@ -555,19 +915,33 @@ export default function Home() {
 
             <div className="track-readout" aria-live="polite">
               <span className="now-playing-label">
-                {spotifyPlaying ? "NOW SPINNING" : "READY TO SPIN"}
+                {spotifyPlaying
+                  ? "NOW SPINNING · FULL TRACK"
+                  : !authenticated
+                    ? "PREMIUM PLAYER · LOGIN ONCE"
+                    : activeCatalog.length
+                      ? "READY · COMPLETE CATALOG"
+                      : "BUILDING THE ARCHIVE"}
               </span>
-              <h2>{track.title}</h2>
-              <p>
-                {track.artist} <span>·</span> {track.mix}
+              {track ? (
+                <h2>
+                  <a href={track.spotifyUrl} target="_blank" rel="noreferrer">
+                    {displayTitle}
+                  </a>
+                </h2>
+              ) : (
+                <h2>{displayTitle}</h2>
+              )}
+              <p title={`${displayArtist} · ${displayAlbum}`}>
+                {displayArtist} <span>·</span> {displayAlbum}
               </p>
 
-              <div className="progress-rail" aria-hidden="true">
+              <div className="progress-rail" aria-label="Track progress">
                 <span style={{ width: `${progress}%` }} />
               </div>
               <div className="time-row">
                 <span>{formatTime(progressMs)}</span>
-                <span>{formatTime(durationMs)}</span>
+                <span>{formatTime(durationMs || track?.durationMs || 0)}</span>
               </div>
 
               <div className={spotifyPlaying ? "equalizer is-moving" : "equalizer"}>
@@ -587,8 +961,8 @@ export default function Home() {
             <button
               type="button"
               className="skip-button"
-              onClick={() => loadTrack(currentTrack - 1)}
-              disabled={!spotifyReady}
+              onClick={() => void playQueueAt(currentTrack - 1, selectedArtist)}
+              disabled={!playerReady || !activeCatalog.length}
               aria-label="Previous jukebox track"
             >
               <span className="skip-glyph is-previous" aria-hidden="true">
@@ -600,10 +974,16 @@ export default function Home() {
 
             <button
               type="button"
-              className="playback-button"
-              onClick={togglePlayback}
-              disabled={!spotifyReady}
-              aria-label={spotifyPlaying ? "Pause jukebox" : "Play jukebox"}
+              className={`playback-button${!authenticated ? " needs-login" : ""}`}
+              onClick={() => void togglePlayback()}
+              disabled={!playbackEnabled}
+              aria-label={
+                !authenticated
+                  ? "Connect Spotify Premium"
+                  : spotifyPlaying
+                    ? "Pause jukebox"
+                    : "Play jukebox"
+              }
             >
               <span
                 className={spotifyPlaying ? "pause-glyph" : "play-glyph"}
@@ -617,8 +997,8 @@ export default function Home() {
             <button
               type="button"
               className="skip-button"
-              onClick={() => loadTrack(currentTrack + 1)}
-              disabled={!spotifyReady}
+              onClick={() => void playQueueAt(currentTrack + 1, selectedArtist)}
+              disabled={!playerReady || !activeCatalog.length}
               aria-label="Next jukebox track"
             >
               <span className="skip-glyph is-next" aria-hidden="true">
@@ -630,20 +1010,30 @@ export default function Home() {
           </div>
 
           <div className="jukebox-footer">
-            <span>
-              <i className={spotifyReady ? "online-dot" : "online-dot is-waiting"} />
-              {embedFallback
-                ? "OPEN SPOTIFY TO LISTEN"
-                : spotifyReady
-                  ? "JUKEBOX ONLINE"
-                  : "TUNING JUKEBOX"}
+            <span title={statusText}>
+              <i
+                className={
+                  playerReady && activeCatalog.length
+                    ? "online-dot"
+                    : "online-dot is-waiting"
+                }
+              />
+              <span className="jukebox-status">{statusText}</span>
             </span>
-            <a href={PLAYLIST_URL} target="_blank" rel="noreferrer">
-              FULL PLAYLIST ON SPOTIFY <span aria-hidden="true">↗</span>
+            <a
+              className="spotify-attribution"
+              href={track?.spotifyUrl ?? artist.url}
+              target="_blank"
+              rel="noreferrer"
+            >
+              <span
+                className="spotify-mark"
+                style={{ backgroundImage: `url(${SPOTIFY_MARK})` }}
+                aria-hidden="true"
+              />
+              PLAY ON SPOTIFY <span aria-hidden="true">↗</span>
             </a>
           </div>
-
-          <div id="spotify-embed" className="spotify-engine" aria-hidden="true" />
         </section>
       </div>
 
@@ -655,17 +1045,19 @@ export default function Home() {
         <button
           className={`enter-button${gateReady ? " is-ready" : ""}`}
           type="button"
-          onClick={enterExperience}
-          disabled={!gateReady}
-          aria-busy={!gateReady}
-          aria-label="Play Mehak's techno jukebox and enter"
+          onClick={() => void enterExperience()}
+          disabled={!gateReady || authChecking}
+          aria-busy={!gateReady || authChecking}
+          aria-label="Enter Mehak's room and play the techno jukebox"
         >
           <span className="button-orbit" aria-hidden="true" />
           <span className="play-mark" aria-hidden="true" />
           <span className="play-word">PLAY</span>
         </button>
         <p className="gate-note">
-          ONE CLICK OPENS THE ROOM <span aria-hidden="true">·</span> SOUND ON
+          {authenticated ? "ONE CLICK OPENS THE ROOM" : "PLAY OPENS THE ROOM"}
+          <span aria-hidden="true"> · </span>
+          {authenticated ? "SOUND ON" : "PREMIUM SPOTIFY"}
         </p>
       </div>
     </main>
