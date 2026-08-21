@@ -41,6 +41,13 @@ export type CatalogTrack = {
   uri: string;
 };
 
+export type CatalogProgress = {
+  completed: number;
+  percent: number;
+  phase: "cache" | "releases" | "tracks";
+  total: number;
+};
+
 type StoredToken = {
   accessToken: string;
   expiresAt: number;
@@ -341,13 +348,17 @@ export async function spotifyApi<T>(
   return (await response.json()) as T;
 }
 
-async function fetchAllPages<T>(initialUrl: string) {
+async function fetchAllPages<T>(
+  initialUrl: string,
+  onProgress?: (loadedItems: number, totalItems: number) => void,
+) {
   const items: T[] = [];
   let next: string | null = initialUrl;
 
   while (next) {
     const page: Paging<T> = await spotifyApi<Paging<T>>(next);
     items.push(...page.items);
+    onProgress?.(items.length, page.total);
     next = page.next;
   }
 
@@ -392,13 +403,20 @@ function readCachedCatalog(artist: SpotifyArtistConfig) {
 
 export async function fetchArtistCatalog(
   artist: SpotifyArtistConfig,
-  onProgress?: (loadedAlbums: number, totalAlbums: number) => void,
+  onProgress?: (progress: CatalogProgress) => void,
 ) {
   const cached = readCachedCatalog(artist);
   if (cached) {
-    onProgress?.(cached.length, cached.length);
+    onProgress?.({
+      completed: cached.length,
+      percent: 100,
+      phase: "cache",
+      total: cached.length,
+    });
     return cached;
   }
+
+  onProgress?.({ completed: 0, percent: 1, phase: "releases", total: 1 });
 
   const albumUrl = new URL(
     `https://api.spotify.com/v1/artists/${artist.id}/albums`,
@@ -408,12 +426,30 @@ export async function fetchArtistCatalog(
     limit: "10",
   }).toString();
 
-  const albums = await fetchAllPages<SpotifyAlbum>(albumUrl.toString());
+  const albums = await fetchAllPages<SpotifyAlbum>(
+    albumUrl.toString(),
+    (loaded, total) => {
+      const ratio = loaded / Math.max(1, total);
+      onProgress?.({
+        completed: Math.min(loaded, total),
+        percent: Math.min(12, 2 + Math.round(ratio * 10)),
+        phase: "releases",
+        total,
+      });
+    },
+  );
   const uniqueAlbums = Array.from(
     new Map(albums.map((album) => [album.id, album])).values(),
   );
   const collected: Array<{ album: SpotifyAlbum; track: SpotifyTrack }> = [];
   let loadedAlbums = 0;
+
+  onProgress?.({
+    completed: 0,
+    percent: 12,
+    phase: "tracks",
+    total: uniqueAlbums.length,
+  });
 
   for (let index = 0; index < uniqueAlbums.length; index += 4) {
     const batch = uniqueAlbums.slice(index, index + 4);
@@ -425,7 +461,16 @@ export async function fetchArtistCatalog(
         url.searchParams.set("limit", "50");
         const tracks = await fetchAllPages<SpotifyTrack>(url.toString());
         loadedAlbums += 1;
-        onProgress?.(loadedAlbums, uniqueAlbums.length);
+        onProgress?.({
+          completed: loadedAlbums,
+          percent:
+            12 +
+            Math.round(
+              (loadedAlbums / Math.max(1, uniqueAlbums.length)) * 88,
+            ),
+          phase: "tracks",
+          total: uniqueAlbums.length,
+        });
         return tracks.map((track) => ({ album, track }));
       }),
     );
