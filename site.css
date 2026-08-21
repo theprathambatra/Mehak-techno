@@ -368,42 +368,65 @@ button {
 
 .party-countdown {
   position: absolute;
-  z-index: 18;
-  top: 88px;
-  left: 50%;
-  width: min(470px, calc(100% - 48px));
-  padding: 11px 14px 10px;
+  z-index: 60;
+  inset: 0;
+  display: grid;
+  align-content: center;
+  width: 100%;
+  height: 100%;
+  padding: clamp(30px, 6vw, 92px);
   overflow: hidden;
-  border: 1px solid rgba(244, 241, 233, 0.2);
-  border-radius: 15px;
+  border: 0;
+  border-radius: 0;
   background:
-    linear-gradient(105deg, rgba(255, 47, 155, 0.08), transparent 28%),
-    rgba(5, 5, 6, 0.76);
-  box-shadow:
-    0 14px 38px rgba(0, 0, 0, 0.32),
-    inset 0 1px rgba(255, 255, 255, 0.05);
-  opacity: 0;
-  pointer-events: none;
-  backdrop-filter: blur(17px) saturate(1.25);
-  transform: translate(-50%, -10px);
-  animation: countdown-arrive 580ms cubic-bezier(0.18, 0.82, 0.2, 1) forwards;
+    radial-gradient(circle at 18% 18%, rgba(255, 47, 155, 0.12), transparent 31%),
+    radial-gradient(circle at 82% 78%, rgba(37, 244, 255, 0.11), transparent 33%),
+    radial-gradient(circle at 50% 50%, rgba(216, 255, 53, 0.045), transparent 28%),
+    #050506;
+  opacity: 1;
+  pointer-events: auto;
+  transform: scale(1);
+  transition:
+    opacity 900ms cubic-bezier(0.66, 0, 0.34, 1),
+    transform 1100ms cubic-bezier(0.2, 0.72, 0.18, 1);
+  animation: countdown-arrive 520ms ease both;
 }
 
 .party-countdown::before {
   content: "";
   position: absolute;
-  inset: -70% 40% -70% -15%;
-  background: linear-gradient(90deg, transparent, rgba(37, 244, 255, 0.12), transparent);
+  inset: -60% 34% -60% -22%;
+  background: linear-gradient(90deg, transparent, rgba(37, 244, 255, 0.1), transparent);
   transform: skewX(-18deg) translateX(-120%);
   animation: countdown-scan 2.4s ease-in-out infinite;
 }
 
+.party-countdown::after {
+  content: "MAC'S PRIVATE LISTENING ROOM · SYSTEM WARM-UP";
+  position: absolute;
+  top: clamp(28px, 5vw, 58px);
+  left: 50%;
+  width: calc(100% - 48px);
+  color: rgba(244, 241, 233, 0.42);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 9px;
+  letter-spacing: 0.2em;
+  text-align: center;
+  transform: translateX(-50%);
+}
+
+.party-countdown[hidden] {
+  display: none;
+}
+
 .party-countdown.is-ready {
-  border-color: rgba(216, 255, 53, 0.52);
-  box-shadow:
-    0 14px 42px rgba(0, 0, 0, 0.38),
-    0 0 30px rgba(216, 255, 53, 0.08),
-    inset 0 1px rgba(255, 255, 255, 0.06);
+  box-shadow: inset 0 0 120px rgba(216, 255, 53, 0.035);
+}
+
+.party-countdown.is-revealing {
+  opacity: 0;
+  pointer-events: none;
+  transform: scale(1.035);
 }
 
 .party-countdown-topline,
@@ -413,36 +436,40 @@ button {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  width: min(960px, 100%);
+  margin-inline: auto;
 }
 
 .party-countdown-topline > span {
   color: var(--paper);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 9px;
+  padding-bottom: clamp(11px, 2vw, 25px);
+  font-size: clamp(9px, 1vw, 13px);
   font-weight: 650;
   letter-spacing: 0.16em;
 }
 
 .party-countdown-topline strong {
   color: var(--acid);
-  font-size: 25px;
-  font-weight: 590;
-  line-height: 0.8;
-  letter-spacing: -0.05em;
-  text-shadow: 0 0 18px rgba(216, 255, 53, 0.2);
+  font-size: clamp(7rem, 22vw, 17rem);
+  font-weight: 540;
+  line-height: 0.68;
+  letter-spacing: -0.09em;
+  text-shadow: 0 0 42px rgba(216, 255, 53, 0.15);
 }
 
 .party-countdown-topline strong small {
-  margin-left: 2px;
-  font-size: 9px;
+  margin-left: 8px;
+  font-size: clamp(12px, 1.5vw, 22px);
   letter-spacing: 0;
 }
 
 .party-countdown-rail {
   position: relative;
   z-index: 1;
-  height: 3px;
-  margin: 9px 0 7px;
+  width: min(960px, 100%);
+  height: 4px;
+  margin: clamp(25px, 4vw, 50px) auto 16px;
   overflow: hidden;
   border-radius: 999px;
   background: rgba(244, 241, 233, 0.13);
@@ -461,13 +488,43 @@ button {
 .party-countdown-sources {
   color: rgba(244, 241, 233, 0.5);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 7.5px;
+  font-size: clamp(7px, 0.8vw, 10px);
   font-weight: 560;
   letter-spacing: 0.1em;
 }
 
 .party-countdown-sources .is-ready {
   color: var(--cyan);
+}
+
+.party-start-button {
+  position: relative;
+  z-index: 2;
+  justify-self: center;
+  min-width: 220px;
+  margin-top: 34px;
+  padding: 15px 22px;
+  border: 1px solid var(--acid);
+  border-radius: 999px;
+  color: var(--ink);
+  background: var(--acid);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  cursor: pointer;
+  box-shadow: 0 0 42px rgba(216, 255, 53, 0.16);
+}
+
+.party-start-button:hover,
+.party-start-button:focus-visible {
+  color: var(--paper);
+  background: transparent;
+  outline: none;
+}
+
+.party-start-button[hidden] {
+  display: none;
 }
 
 .availability-audit {
@@ -1998,9 +2055,11 @@ button {
 }
 
 @keyframes countdown-arrive {
+  from {
+    opacity: 0;
+  }
   to {
     opacity: 1;
-    transform: translate(-50%, 0);
   }
 }
 
@@ -2193,13 +2252,14 @@ button {
   }
 
   .party-countdown {
-    top: 99px;
-    width: min(430px, calc(100% - 30px));
-    padding: 9px 11px 8px;
+    inset: 0;
+    width: 100%;
+    padding: 34px 22px;
+    border-radius: 0;
   }
 
   .party-countdown-topline strong {
-    font-size: 21px;
+    font-size: clamp(7rem, 28vw, 12rem);
   }
 
   .availability-audit {
@@ -2381,21 +2441,22 @@ button {
   }
 
   .party-countdown {
-    top: 96px;
-    width: calc(100% - 22px);
-    border-radius: 12px;
+    inset: 0;
+    width: 100%;
+    padding: 28px 18px;
+    border-radius: 0;
   }
 
   .party-countdown-topline > span {
-    max-width: 74%;
+    max-width: 58%;
     overflow: hidden;
-    font-size: 7.5px;
+    font-size: 8px;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
   .party-countdown-sources {
-    font-size: 6.5px;
+    font-size: 6.8px;
     letter-spacing: 0.06em;
   }
 
