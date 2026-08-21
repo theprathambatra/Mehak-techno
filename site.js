@@ -8,7 +8,7 @@ import {
   SPOTIFY_ARTISTS,
   spotifyApi,
   wasRoomPending,
-} from "./spotify.js";
+} from "./spotify.js?v=4";
 
 const PLAYBACK_BATCH_SIZE = 50;
 const AUDIT_MODE_KEY = "mehak_spotify_preview_audit_v1";
@@ -382,10 +382,13 @@ const renderPartyCountdown = () => {
 
 const updatePartyCountdown = () => {
   const target = getPartyTarget();
-  if (partyProgress < target) {
+  const visualTarget =
+    target < 100 ? Math.max(target, Math.min(92, partyProgress + 1)) : target;
+  if (partyProgress < visualTarget) {
     partyProgress = Math.min(
-      target,
-      partyProgress + Math.max(1, Math.ceil((target - partyProgress) / 10)),
+      visualTarget,
+      partyProgress +
+        Math.max(1, Math.ceil((visualTarget - partyProgress) / 10)),
     );
   }
   renderPartyCountdown();
@@ -1315,9 +1318,9 @@ const initialize = async () => {
   if (!authenticated) return;
 
   if (!auditMode) void initializePlayer();
-  for (const artist of SPOTIFY_ARTISTS) {
-    await ensureCatalog(artist.key);
-  }
+  await Promise.all(
+    SPOTIFY_ARTISTS.map((artist) => ensureCatalog(artist.key)),
+  );
   renderAudit();
 };
 

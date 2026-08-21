@@ -4,9 +4,9 @@ const STATE_STORAGE_KEY = "mehak_spotify_oauth_state";
 const REDIRECT_STORAGE_KEY = "mehak_spotify_redirect_uri";
 const PENDING_ROOM_KEY = "mehak_spotify_pending_room";
 const CATALOG_CACHE_VERSION = 3;
-const CATALOG_CACHE_TTL = 24 * 60 * 60 * 1000;
-const SPOTIFY_REQUEST_INTERVAL_MS = 650;
+const CATALOG_CACHE_TTL = 30 * 24 * 60 * 60 * 1000;
 const SPOTIFY_MAX_RATE_LIMIT_RETRIES = 10;
+const SPOTIFY_ALBUM_BATCH_SIZE = 20;
 
 export const SPOTIFY_CLIENT_ID = "d7993980b50b4617908c37aa3c3d3692";
 
@@ -79,6 +79,10 @@ type SpotifyAlbum = {
   release_date: string;
 };
 
+type SpotifyFullAlbum = SpotifyAlbum & {
+  tracks: Paging<SpotifyTrack>;
+};
+
 type SpotifyTrack = {
   artists: Array<{ id: string; name: string }>;
   disc_number: number;
@@ -94,8 +98,6 @@ type SpotifyTrack = {
 };
 
 let refreshPromise: Promise<string> | null = null;
-let spotifyRequestQueue: Promise<void> = Promise.resolve();
-let lastSpotifyRequestStartedAt = 0;
 
 function toBase64Url(bytes: Uint8Array) {
   let binary = "";
@@ -308,15 +310,6 @@ function wait(milliseconds: number) {
   return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
 }
 
-function enqueueSpotifyRequest<T>(request: () => Promise<T>) {
-  const result = spotifyRequestQueue.then(request, request);
-  spotifyRequestQueue = result.then(
-    () => undefined,
-    () => undefined,
-  );
-  return result;
-}
-
 function announceSpotifyCooldown(retryAfterSeconds: number, attempt: number) {
   window.dispatchEvent(
     new CustomEvent("mehak:spotify-rate-limit", {
@@ -331,69 +324,60 @@ export async function spotifyApi<T>(
   attempt = 0,
   forceRefresh = false,
 ): Promise<T> {
-  return enqueueSpotifyRequest(async () => {
-    let currentAttempt = attempt;
-    let refreshed = forceRefresh;
-    let accessToken = await getSpotifyAccessToken(forceRefresh);
+  let currentAttempt = attempt;
+  let refreshed = forceRefresh;
+  let accessToken = await getSpotifyAccessToken(forceRefresh);
 
-    while (true) {
-      const pacingDelay = Math.max(
-        0,
-        lastSpotifyRequestStartedAt + SPOTIFY_REQUEST_INTERVAL_MS - Date.now(),
-      );
-      if (pacingDelay > 0) await wait(pacingDelay);
+  while (true) {
+    const response = await fetch(url, {
+      ...init,
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        ...(init.body ? { "Content-Type": "application/json" } : {}),
+        ...init.headers,
+      },
+    });
 
-      lastSpotifyRequestStartedAt = Date.now();
-      const response = await fetch(url, {
-        ...init,
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          ...(init.body ? { "Content-Type": "application/json" } : {}),
-          ...init.headers,
-        },
-      });
-
-      if (response.status === 401 && !refreshed) {
-        accessToken = await getSpotifyAccessToken(true);
-        refreshed = true;
-        continue;
-      }
-
-      if (
-        response.status === 429 &&
-        currentAttempt < SPOTIFY_MAX_RATE_LIMIT_RETRIES
-      ) {
-        const headerValue = Number(response.headers.get("Retry-After"));
-        const retryAfterSeconds =
-          Number.isFinite(headerValue) && headerValue > 0
-            ? Math.ceil(headerValue)
-            : Math.min(30, 2 ** (currentAttempt + 1));
-        announceSpotifyCooldown(retryAfterSeconds, currentAttempt + 1);
-        await wait(retryAfterSeconds * 1000 + Math.round(Math.random() * 250));
-        currentAttempt += 1;
-        continue;
-      }
-
-      if (!response.ok) {
-        let message = `Spotify request failed (${response.status})`;
-        try {
-          const payload = (await response.json()) as {
-            error?: { message?: string } | string;
-          };
-          if (typeof payload.error === "string") message = payload.error;
-          if (typeof payload.error === "object" && payload.error?.message) {
-            message = payload.error.message;
-          }
-        } catch {
-          // Spotify sometimes returns an empty body for player errors.
-        }
-        throw new Error(message);
-      }
-
-      if (response.status === 204) return undefined as T;
-      return (await response.json()) as T;
+    if (response.status === 401 && !refreshed) {
+      accessToken = await getSpotifyAccessToken(true);
+      refreshed = true;
+      continue;
     }
-  });
+
+    if (
+      response.status === 429 &&
+      currentAttempt < SPOTIFY_MAX_RATE_LIMIT_RETRIES
+    ) {
+      const headerValue = Number(response.headers.get("Retry-After"));
+      const retryAfterSeconds =
+        Number.isFinite(headerValue) && headerValue > 0
+          ? Math.ceil(headerValue)
+          : Math.min(30, 2 ** (currentAttempt + 1));
+      announceSpotifyCooldown(retryAfterSeconds, currentAttempt + 1);
+      await wait(retryAfterSeconds * 1000 + Math.round(Math.random() * 250));
+      currentAttempt += 1;
+      continue;
+    }
+
+    if (!response.ok) {
+      let message = `Spotify request failed (${response.status})`;
+      try {
+        const payload = (await response.json()) as {
+          error?: { message?: string } | string;
+        };
+        if (typeof payload.error === "string") message = payload.error;
+        if (typeof payload.error === "object" && payload.error?.message) {
+          message = payload.error.message;
+        }
+      } catch {
+        // Spotify sometimes returns an empty body for player errors.
+      }
+      throw new Error(message);
+    }
+
+    if (response.status === 204) return undefined as T;
+    return (await response.json()) as T;
+  }
 }
 
 async function fetchAllPages<T>(
@@ -499,30 +483,45 @@ export async function fetchArtistCatalog(
     total: uniqueAlbums.length,
   });
 
-  for (let index = 0; index < uniqueAlbums.length; index += 4) {
-    const batch = uniqueAlbums.slice(index, index + 4);
-    const batchTracks = await Promise.all(
-      batch.map(async (album) => {
-        const url = new URL(
-          `https://api.spotify.com/v1/albums/${album.id}/tracks`,
-        );
-        url.searchParams.set("limit", "50");
-        const tracks = await fetchAllPages<SpotifyTrack>(url.toString());
-        loadedAlbums += 1;
-        onProgress?.({
-          completed: loadedAlbums,
-          percent:
-            12 +
-            Math.round(
-              (loadedAlbums / Math.max(1, uniqueAlbums.length)) * 88,
-            ),
-          phase: "tracks",
-          total: uniqueAlbums.length,
-        });
-        return tracks.map((track) => ({ album, track }));
+  for (
+    let index = 0;
+    index < uniqueAlbums.length;
+    index += SPOTIFY_ALBUM_BATCH_SIZE
+  ) {
+    const batch = uniqueAlbums.slice(index, index + SPOTIFY_ALBUM_BATCH_SIZE);
+    const url = new URL("https://api.spotify.com/v1/albums");
+    url.searchParams.set("ids", batch.map((album) => album.id).join(","));
+
+    const response = await spotifyApi<{
+      albums: Array<SpotifyFullAlbum | null>;
+    }>(url.toString());
+
+    const expanded = await Promise.all(
+      response.albums.map(async (album, albumIndex) => {
+        if (!album) return [];
+        const sourceAlbum = batch[albumIndex] ?? album;
+        const tracks = [...album.tracks.items];
+        if (album.tracks.next) {
+          tracks.push(
+            ...(await fetchAllPages<SpotifyTrack>(album.tracks.next)),
+          );
+        }
+        return tracks.map((track) => ({ album: sourceAlbum, track }));
       }),
     );
-    batchTracks.forEach((tracks) => collected.push(...tracks));
+
+    expanded.forEach((tracks) => collected.push(...tracks));
+    loadedAlbums += batch.length;
+    onProgress?.({
+      completed: Math.min(loadedAlbums, uniqueAlbums.length),
+      percent:
+        12 +
+        Math.round(
+          (loadedAlbums / Math.max(1, uniqueAlbums.length)) * 88,
+        ),
+      phase: "tracks",
+      total: uniqueAlbums.length,
+    });
   }
 
   const uniqueTracks = new Map<string, CatalogTrack>();
