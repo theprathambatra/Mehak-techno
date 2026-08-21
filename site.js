@@ -63,6 +63,14 @@ const signal = document.getElementById("signal");
 const signalCopy = document.getElementById("signal-copy");
 const laserButton = document.getElementById("laser-button");
 const laserShow = document.getElementById("laser-show");
+const partyCountdown = document.getElementById("party-countdown");
+const partyCountdownLabel = document.getElementById("party-countdown-label");
+const partyCountdownNumber = document.getElementById("party-countdown-number");
+const partyCountdownFill = document.getElementById("party-countdown-fill");
+const artbatPartyProgress = document.getElementById("artbat-party-progress");
+const deckPartyProgress = document.getElementById("deck-party-progress");
+const solomunPartyProgress = document.getElementById("solomun-party-progress");
+const recordBay = document.getElementById("record-bay");
 const record = document.getElementById("record");
 const recordLabel = document.getElementById("record-label");
 const tonearm = document.getElementById("tonearm");
@@ -99,6 +107,7 @@ let selectedArtist =
 let playingArtist = selectedArtist;
 let catalogs = {};
 let catalogProgress = {};
+let artistProgress = { artbat: 0, solomun: 0 };
 let loadingCatalogs = new Set();
 let currentTrack = 0;
 let progressMs = 0;
@@ -111,6 +120,22 @@ let weatherRequested = false;
 let activeTimeZone;
 let playerMessage = "CONNECTING TO SPOTIFY";
 let spotifySdkPromise;
+let partyProgress = 0;
+let partyOverlayDismissed = false;
+let autoLaunchAttempted = false;
+let autoPartyLaunchStarted = false;
+let partyDismissTimer;
+let scratchAudio = null;
+const scratchGesture = {
+  active: false,
+  centerX: 0,
+  centerY: 0,
+  lastAngle: 0,
+  lastTime: 0,
+  pointerId: -1,
+  rotation: 0,
+  wasPlaying: false,
+};
 
 const compactNumber = (value) =>
   String(value).padStart(value > 99 ? 3 : 2, "0");
@@ -159,6 +184,82 @@ const setStatus = (message) => {
   jukeboxStatus.title = shown;
 };
 
+const getPartyTarget = () => {
+  if (!authenticated) return 0;
+  const allCatalogsReady = SPOTIFY_ARTISTS.every(
+    (artist) => catalogs[artist.key]?.length,
+  );
+  if (allCatalogsReady && playerReady) return 100;
+  return Math.min(
+    99,
+    Math.max(
+      2,
+      Math.round(
+        (artistProgress.artbat ?? 0) * 0.45 +
+          (artistProgress.solomun ?? 0) * 0.45 +
+          (playerReady ? 10 : 0),
+      ),
+    ),
+  );
+};
+
+const renderPartyCountdown = () => {
+  const visible =
+    experience.classList.contains("is-live") &&
+    authenticated &&
+    !partyOverlayDismissed;
+  partyCountdown.hidden = !visible;
+  if (!visible) return;
+
+  const needsTap =
+    autoLaunchAttempted &&
+    /PRESS PLAY|ANOTHER TAP|AUTOPLAY/.test(playerMessage.toUpperCase());
+  partyCountdownLabel.textContent =
+    partyProgress < 100
+      ? "COUNTDOWN TO THE PARTY"
+      : spotifyPlaying
+        ? "PARTY ONLINE"
+        : needsTap
+          ? "TAP JUKEBOX PLAY TO DROP THE NEEDLE"
+          : "DROPPING THE NEEDLE";
+  partyCountdownNumber.textContent = String(partyProgress);
+  partyCountdownFill.style.width = `${partyProgress}%`;
+  artbatPartyProgress.textContent = `ARTBAT ${Math.round(artistProgress.artbat ?? 0)}%`;
+  solomunPartyProgress.textContent = `SOLOMUN ${Math.round(artistProgress.solomun ?? 0)}%`;
+  deckPartyProgress.textContent = playerReady ? "DECK READY" : "DECK WARMING";
+  deckPartyProgress.classList.toggle("is-ready", playerReady);
+  partyCountdown.classList.toggle("is-ready", partyProgress >= 100);
+};
+
+const updatePartyCountdown = () => {
+  const target = getPartyTarget();
+  if (partyProgress < target) {
+    partyProgress = Math.min(
+      target,
+      partyProgress + Math.max(1, Math.ceil((target - partyProgress) / 10)),
+    );
+  }
+  renderPartyCountdown();
+
+  const allCatalogsReady = SPOTIFY_ARTISTS.every(
+    (artist) => catalogs[artist.key]?.length,
+  );
+  if (
+    experience.classList.contains("is-live") &&
+    authenticated &&
+    playerReady &&
+    allCatalogsReady &&
+    partyProgress >= 100 &&
+    !autoPartyLaunchStarted
+  ) {
+    autoPartyLaunchStarted = true;
+    autoLaunchAttempted = true;
+    setStatus("100% · DROPPING THE NEEDLE");
+    renderPartyCountdown();
+    window.setTimeout(() => void playQueueAt(0, selectedArtist), 520);
+  }
+};
+
 const setPlaying = (playing) => {
   spotifyPlaying = playing;
   experience.classList.toggle("is-playing", playing);
@@ -182,6 +283,15 @@ const setPlaying = (playing) => {
       : authenticated
         ? "TUNING IN"
         : "SPOTIFY LOGIN";
+
+  if (playing && partyProgress >= 100 && !partyOverlayDismissed) {
+    window.clearTimeout(partyDismissTimer);
+    partyDismissTimer = window.setTimeout(() => {
+      partyOverlayDismissed = true;
+      renderPartyCountdown();
+    }, 1100);
+  }
+  renderPartyCountdown();
 };
 
 const renderArtistTabs = () => {
@@ -285,15 +395,24 @@ const ensureCatalog = async (key) => {
   const artist = getArtist(key);
   loadingCatalogs.add(key);
   catalogProgress[key] = `SCANNING ${artist.name} RELEASES`;
+  artistProgress[key] = Math.max(artistProgress[key] ?? 0, 1);
   renderTrack();
+  renderPartyCountdown();
 
   try {
-    const tracks = await fetchArtistCatalog(artist, (done, total) => {
+    const tracks = await fetchArtistCatalog(artist, (scan) => {
+      artistProgress[key] = Math.max(artistProgress[key] ?? 0, scan.percent);
       catalogProgress[key] =
-        `SCANNING RELEASES ${compactNumber(done)}/${compactNumber(total)}`;
+        scan.phase === "cache"
+          ? "ARCHIVE RESTORED"
+          : scan.phase === "releases"
+            ? `FINDING RELEASES ${compactNumber(scan.completed)}/${compactNumber(scan.total)}`
+            : `CUTTING VINYL ${compactNumber(scan.completed)}/${compactNumber(scan.total)}`;
       if (selectedArtist === key) renderTrack();
+      renderPartyCountdown();
     });
     catalogs = { ...catalogs, [key]: tracks };
+    artistProgress[key] = 100;
     catalogProgress[key] = `${tracks.length} TRACKS READY`;
     if (selectedArtist === key) {
       durationMs = tracks[0]?.durationMs ?? 0;
@@ -304,6 +423,7 @@ const ensureCatalog = async (key) => {
       );
     }
     renderTrack();
+    renderPartyCountdown();
     return tracks;
   } catch (error) {
     const message =
@@ -631,6 +751,219 @@ const shootLasers = () => {
   playLaserSound();
 };
 
+const startScratchAudio = () => {
+  if (!("AudioContext" in window)) return null;
+
+  const context = new AudioContext();
+  const source = context.createBufferSource();
+  const noise = context.createBuffer(1, context.sampleRate, context.sampleRate);
+  const channel = noise.getChannelData(0);
+  let previous = 0;
+
+  for (let index = 0; index < channel.length; index += 1) {
+    const raw = Math.random() * 2 - 1;
+    previous = previous * 0.42 + raw * 0.58;
+    channel[index] = raw - previous * 0.72;
+  }
+
+  const filter = context.createBiquadFilter();
+  const gain = context.createGain();
+  const oscillator = context.createOscillator();
+  const oscillatorGain = context.createGain();
+
+  source.buffer = noise;
+  source.loop = true;
+  source.playbackRate.value = 0.8;
+  filter.type = "bandpass";
+  filter.frequency.value = 1250;
+  filter.Q.value = 1.35;
+  gain.gain.value = 0.0001;
+  oscillator.type = "triangle";
+  oscillator.frequency.value = 180;
+  oscillatorGain.gain.value = 0.0001;
+
+  source.connect(filter);
+  filter.connect(gain);
+  gain.connect(context.destination);
+  oscillator.connect(oscillatorGain);
+  oscillatorGain.connect(context.destination);
+  source.start();
+  oscillator.start();
+  void context.resume();
+
+  scratchAudio = {
+    context,
+    filter,
+    gain,
+    oscillator,
+    oscillatorGain,
+    source,
+  };
+  return scratchAudio;
+};
+
+const driveScratchSound = (angleDelta, elapsed) => {
+  if (!scratchAudio) return;
+
+  const velocity = Math.abs(angleDelta) / Math.max(8, elapsed);
+  const intensity = Math.min(1, velocity * 2.7);
+  const directionTone = angleDelta < 0 ? 0.78 : 1.16;
+  const now = scratchAudio.context.currentTime;
+  const peak = 0.018 + intensity * 0.15;
+
+  scratchAudio.gain.gain.cancelScheduledValues(now);
+  scratchAudio.gain.gain.setValueAtTime(
+    Math.max(0.0001, scratchAudio.gain.gain.value),
+    now,
+  );
+  scratchAudio.gain.gain.linearRampToValueAtTime(peak, now + 0.012);
+  scratchAudio.gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.12);
+  scratchAudio.oscillatorGain.gain.cancelScheduledValues(now);
+  scratchAudio.oscillatorGain.gain.setValueAtTime(
+    Math.max(0.0001, scratchAudio.oscillatorGain.gain.value),
+    now,
+  );
+  scratchAudio.oscillatorGain.gain.linearRampToValueAtTime(
+    0.004 + intensity * 0.028,
+    now + 0.01,
+  );
+  scratchAudio.oscillatorGain.gain.exponentialRampToValueAtTime(
+    0.0001,
+    now + 0.095,
+  );
+  scratchAudio.filter.frequency.setTargetAtTime(
+    620 + intensity * 4200,
+    now,
+    0.012,
+  );
+  scratchAudio.source.playbackRate.setTargetAtTime(
+    (0.42 + intensity * 2.35) * directionTone,
+    now,
+    0.01,
+  );
+  scratchAudio.oscillator.frequency.setTargetAtTime(
+    (120 + intensity * 760) * directionTone,
+    now,
+    0.012,
+  );
+};
+
+const stopScratchAudio = () => {
+  const audio = scratchAudio;
+  scratchAudio = null;
+  if (!audio) return;
+
+  const now = audio.context.currentTime;
+  audio.gain.gain.cancelScheduledValues(now);
+  audio.gain.gain.setTargetAtTime(0.0001, now, 0.022);
+  audio.oscillatorGain.gain.cancelScheduledValues(now);
+  audio.oscillatorGain.gain.setTargetAtTime(0.0001, now, 0.018);
+  window.setTimeout(() => {
+    try {
+      audio.source.stop();
+      audio.oscillator.stop();
+    } catch {
+      // A rapid second gesture may already have stopped these nodes.
+    }
+    void audio.context.close();
+  }, 90);
+};
+
+const startVinylScratch = (event) => {
+  if (!("AudioContext" in window) || scratchGesture.active) return;
+  event.preventDefault();
+  event.stopPropagation();
+
+  const bounds = recordBay.getBoundingClientRect();
+  scratchGesture.centerX = bounds.left + bounds.width / 2;
+  scratchGesture.centerY = bounds.top + bounds.height / 2;
+  scratchGesture.lastAngle = Math.atan2(
+    event.clientY - scratchGesture.centerY,
+    event.clientX - scratchGesture.centerX,
+  );
+  scratchGesture.lastTime = performance.now();
+  scratchGesture.pointerId = event.pointerId;
+  scratchGesture.wasPlaying = spotifyPlaying;
+  scratchGesture.active = true;
+  recordBay.setPointerCapture(event.pointerId);
+  recordBay.classList.add("is-scratching");
+  record.classList.add("is-scratching");
+  tonearm.classList.add("is-scratching");
+  startScratchAudio();
+
+  if (spotifyPlaying) {
+    void spotifyPlayer?.pause();
+    setPlaying(false);
+  }
+};
+
+const moveVinylScratch = (event) => {
+  if (!scratchGesture.active || scratchGesture.pointerId !== event.pointerId) return;
+  event.preventDefault();
+  event.stopPropagation();
+
+  const angle = Math.atan2(
+    event.clientY - scratchGesture.centerY,
+    event.clientX - scratchGesture.centerX,
+  );
+  let delta = ((angle - scratchGesture.lastAngle) * 180) / Math.PI;
+  delta = ((delta + 540) % 360) - 180;
+  const now = performance.now();
+
+  scratchGesture.rotation += delta;
+  scratchGesture.lastAngle = angle;
+  driveScratchSound(delta, now - scratchGesture.lastTime);
+  scratchGesture.lastTime = now;
+  record.style.setProperty("--scratch-angle", `${scratchGesture.rotation}deg`);
+};
+
+const finishVinylScratch = (event) => {
+  if (!scratchGesture.active || scratchGesture.pointerId !== event.pointerId) return;
+  event.preventDefault();
+  event.stopPropagation();
+
+  if (recordBay.hasPointerCapture(event.pointerId)) {
+    recordBay.releasePointerCapture(event.pointerId);
+  }
+  scratchGesture.active = false;
+  recordBay.classList.remove("is-scratching");
+  record.classList.remove("is-scratching");
+  tonearm.classList.remove("is-scratching");
+  stopScratchAudio();
+
+  if (scratchGesture.wasPlaying) {
+    void spotifyPlayer?.resume().catch(() => {
+      setStatus("PRESS PLAY TO RESUME THE ROOM");
+      renderTrack();
+    });
+  }
+};
+
+const nudgeVinyl = (direction) => {
+  if (!("AudioContext" in window) || scratchGesture.active) return;
+  scratchGesture.active = true;
+  scratchGesture.wasPlaying = spotifyPlaying;
+  scratchGesture.rotation += direction * 42;
+  record.style.setProperty("--scratch-angle", `${scratchGesture.rotation}deg`);
+  recordBay.classList.add("is-scratching");
+  record.classList.add("is-scratching");
+  tonearm.classList.add("is-scratching");
+  startScratchAudio();
+  driveScratchSound(direction * 42, 45);
+  if (spotifyPlaying) {
+    void spotifyPlayer?.pause();
+    setPlaying(false);
+  }
+  window.setTimeout(() => {
+    scratchGesture.active = false;
+    recordBay.classList.remove("is-scratching");
+    record.classList.remove("is-scratching");
+    tonearm.classList.remove("is-scratching");
+    stopScratchAudio();
+    if (scratchGesture.wasPlaying) void spotifyPlayer?.resume();
+  }, 150);
+};
+
 window.setTimeout(() => {
   enterButton.classList.add("is-ready");
   enterButton.disabled = authChecking;
@@ -638,6 +971,7 @@ window.setTimeout(() => {
 }, 520);
 
 window.setInterval(updateClock, 1000);
+window.setInterval(updatePartyCountdown, 54);
 window.setInterval(() => {
   if (!spotifyPlaying) return;
   progressMs = Math.min(
@@ -654,6 +988,7 @@ window.setInterval(() => {
 enterButton.addEventListener("click", async () => {
   experience.classList.add("is-live");
   entryGate.classList.add("is-open");
+  renderPartyCountdown();
   await spiralVideo.play().catch(() => {});
   if (!weatherRequested) requestWeather();
 
@@ -678,6 +1013,15 @@ artistButtons.forEach((button) =>
 );
 environmentStrip.addEventListener("click", requestWeather);
 laserButton.addEventListener("click", shootLasers);
+recordBay.addEventListener("pointerdown", startVinylScratch);
+recordBay.addEventListener("pointermove", moveVinylScratch);
+recordBay.addEventListener("pointerup", finishVinylScratch);
+recordBay.addEventListener("pointercancel", finishVinylScratch);
+recordBay.addEventListener("keydown", (event) => {
+  if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+  event.preventDefault();
+  nudgeVinyl(event.key === "ArrowLeft" ? -1 : 1);
+});
 
 experience.addEventListener("pointermove", (event) => {
   if (event.pointerType === "touch") return;
@@ -746,11 +1090,9 @@ const initialize = async () => {
   if (!authenticated) return;
 
   void initializePlayer();
-  await ensureCatalog(selectedArtist);
-  const otherArtist = SPOTIFY_ARTISTS.find(
-    (artist) => artist.key !== selectedArtist,
+  await Promise.all(
+    SPOTIFY_ARTISTS.map((artist) => ensureCatalog(artist.key)),
   );
-  if (otherArtist) void ensureCatalog(otherArtist.key);
 };
 
 void initialize();
