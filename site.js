@@ -150,10 +150,14 @@ let autoLaunchAttempted = false;
 let autoPartyLaunchStarted = false;
 let partyDismissTimer;
 let scratchAudio = null;
-const auditRequested = new URLSearchParams(window.location.search).get("audit") === "1";
+const startupParameters = new URLSearchParams(window.location.search);
+const auditRequested = startupParameters.get("audit") === "1";
+const returningFromAuditLogin =
+  sessionStorage.getItem(AUDIT_MODE_KEY) === "1" &&
+  (startupParameters.has("code") || startupParameters.has("error"));
 if (auditRequested) sessionStorage.setItem(AUDIT_MODE_KEY, "1");
-let auditMode =
-  auditRequested || sessionStorage.getItem(AUDIT_MODE_KEY) === "1";
+else if (!returningFromAuditLogin) sessionStorage.removeItem(AUDIT_MODE_KEY);
+let auditMode = auditRequested || returningFromAuditLogin;
 let auditReport = null;
 const scratchGesture = {
   active: false,
