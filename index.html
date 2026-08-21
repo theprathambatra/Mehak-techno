@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Built for Mehak's Love for Techno</title>
+    <meta
+      name="description"
+      content="A private, immersive techno listening room built for Mehak."
+    />
+    <meta property="og:title" content="Built for Mehak's Love for Techno" />
+    <meta
+      property="og:description"
+      content="A private techno transmission built for Mehak."
+    />
+    <meta
+      property="og:image"
+      content="https://mehak-techno.prathambatra68.chatgpt.site/og.png"
+    />
+    <meta property="og:type" content="website" />
+    <meta
+      property="og:url"
+      content="https://theprathambatra.github.io/Mehak-techno/"
+    />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link
+      rel="icon"
+      href="https://mehak-techno.prathambatra68.chatgpt.site/favicon.svg"
+    />
+    <link rel="stylesheet" href="./site.css" />
+  </head>
+  <body>
+    <main class="experience" id="experience">
+      <div class="visual-stage" aria-hidden="true">
+        <video
+          class="spiral-video"
+          id="spiral-video"
+          muted
+          loop
+          playsinline
+          preload="auto"
+          poster="https://mehak-techno.prathambatra68.chatgpt.site/spiral-poster.jpg"
+        >
+          <source
+            src="https://mehak-techno.prathambatra68.chatgpt.site/spiral.mp4"
+            type="video/mp4"
+          />
+        </video>
+        <div class="projection-wash"></div>
+      </div>
+
+      <div class="light-beam light-beam-one" aria-hidden="true"></div>
+      <div class="light-beam light-beam-two" aria-hidden="true"></div>
+      <div class="scanlines" aria-hidden="true"></div>
+      <div class="grain" aria-hidden="true"></div>
+      <div class="cursor-light" aria-hidden="true"></div>
+
+      <header class="topbar">
+        <p>MEHAK / TECHNO ARCHIVE</p>
+        <p class="topbar-center">PRIVATE TRANSMISSION 001</p>
+        <p class="signal-label">
+          <span class="signal" id="signal"></span>
+          <span id="signal-text">CONNECTING</span>
+        </p>
+      </header>
+
+      <div class="content-grid">
+        <section class="title-block" aria-labelledby="main-title">
+          <p class="eyebrow">A LOVE LETTER AT 130 BPM</p>
+          <h1 id="main-title">
+            <span>BUILT FOR</span>
+            <span>MEHAK'S LOVE</span>
+            <span>FOR TECHNO</span>
+          </h1>
+          <div class="title-rule">
+            <span></span>
+            <p>SELECTED FREQUENCIES / NO INTERRUPTIONS</p>
+          </div>
+        </section>
+
+        <section class="player-console" aria-label="Mehak's techno playlist">
+          <div class="console-header">
+            <div>
+              <span class="console-kicker">NOW TRANSMITTING</span>
+              <p>MEHAK'S TECHNO PLAYLIST</p>
+            </div>
+            <span class="console-index">01</span>
+          </div>
+
+          <div class="spotify-shell" id="spotify-shell">
+            <div id="spotify-embed" class="spotify-mount"></div>
+          </div>
+
+          <div class="console-footer">
+            <span>SPOTIFY EMBED</span>
+            <a
+              href="https://open.spotify.com/playlist/18vUeZ9BdtMRNV6gI8RnR6"
+              target="_blank"
+              rel="noreferrer"
+            >
+              OPEN PLAYLIST <span aria-hidden="true">↗</span>
+            </a>
+          </div>
+        </section>
+      </div>
+
+      <div class="entry-gate" id="entry-gate">
+        <p class="gate-label">PRIVATE LISTENING ROOM</p>
+        <button
+          class="enter-button"
+          id="enter-button"
+          type="button"
+          disabled
+          aria-busy="true"
+          aria-label="Play Mehak's techno playlist and enter"
+        >
+          <span class="button-orbit" aria-hidden="true"></span>
+          <span class="play-mark" aria-hidden="true"></span>
+          <span class="play-word">PLAY</span>
+        </button>
+        <p class="gate-note">
+          SOUND ON <span aria-hidden="true">•</span> BEST EXPERIENCED FULL SCREEN
+        </p>
+      </div>
+    </main>
+
+    <script src="./site.js"></script>
+    <script
+      src="https://open.spotify.com/embed/iframe-api/v1"
+      async
+    ></script>
+  </body>
+</html>
