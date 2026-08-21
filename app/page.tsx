@@ -26,6 +26,7 @@ import {
 import type { ArtistKey } from "./spotify";
 
 const PLAYBACK_BATCH_SIZE = 50;
+const AUDIT_MODE_KEY = "mehak_spotify_preview_audit_v1";
 const SPOTIFY_MARK =
   "https://open.spotifycdn.com/cdn/images/favicon32.b64ecc03.png";
 
@@ -211,8 +212,16 @@ function compactNumber(value: number) {
 }
 
 export default function Home() {
+  const [auditMode, setAuditMode] = useState(() => {
+    if (typeof window === "undefined") return false;
+    const requested =
+      new URLSearchParams(window.location.search).get("audit") === "1";
+    if (requested) sessionStorage.setItem(AUDIT_MODE_KEY, "1");
+    return requested || sessionStorage.getItem(AUDIT_MODE_KEY) === "1";
+  });
   const [entered, setEntered] = useState(
-    () => typeof window !== "undefined" && wasRoomPending(),
+    () =>
+      typeof window !== "undefined" && (wasRoomPending() || auditMode),
   );
   const [gateReady, setGateReady] = useState(false);
   const [authenticated, setAuthenticated] = useState(false);
@@ -238,6 +247,7 @@ export default function Home() {
   const [partyOverlayDismissed, setPartyOverlayDismissed] = useState(false);
   const [autoLaunchAttempted, setAutoLaunchAttempted] = useState(false);
   const [isScratching, setIsScratching] = useState(false);
+  const [auditCopied, setAuditCopied] = useState(false);
   const [currentTrack, setCurrentTrack] = useState(0);
   const [progressMs, setProgressMs] = useState(0);
   const [durationMs, setDurationMs] = useState(0);
@@ -290,6 +300,61 @@ export default function Home() {
   const allCatalogsReady = SPOTIFY_ARTISTS.every(
     (item) => Boolean(catalogs[item.key]?.length),
   );
+  const auditProgress = Math.round(
+    (artbatPartyProgress + solomunPartyProgress) / 2,
+  );
+  const auditReport = useMemo(() => {
+    const artbatTracks = catalogs.artbat ?? [];
+    const solomunTracks = catalogs.solomun ?? [];
+    const entries = [...artbatTracks, ...solomunTracks];
+    const uniqueTracks = new Map<string, CatalogTrack>();
+
+    entries.forEach((item) => {
+      const existing = uniqueTracks.get(item.id);
+      if (!existing || (!existing.previewUrl && item.previewUrl)) {
+        uniqueTracks.set(item.id, item);
+      }
+    });
+
+    const unique = Array.from(uniqueTracks.values());
+    const previewTracks = unique.filter((item) => Boolean(item.previewUrl));
+
+    return {
+      auditVersion: 1,
+      generatedAt: new Date().toISOString(),
+      source: "Spotify Web API preview_url availability snapshot",
+      artists: {
+        artbat: {
+          entries: artbatTracks.length,
+          previews: artbatTracks.filter((item) => Boolean(item.previewUrl)).length,
+        },
+        solomun: {
+          entries: solomunTracks.length,
+          previews: solomunTracks.filter((item) => Boolean(item.previewUrl)).length,
+        },
+      },
+      summary: {
+        catalogEntries: entries.length,
+        duplicateEntriesAcrossArtists: entries.length - unique.length,
+        uniqueTracks: unique.length,
+        uniqueTracksWithPreview: previewTracks.length,
+        uniqueTracksWithoutPreview: unique.length - previewTracks.length,
+        previewCoveragePercent: unique.length
+          ? Math.round((previewTracks.length / unique.length) * 1000) / 10
+          : 0,
+      },
+      tracks: unique.map((item) => ({
+        album: item.album,
+        artists: item.artists,
+        id: item.id,
+        previewUrl: item.previewUrl,
+        releaseDate: item.releaseDate,
+        spotifyUrl: item.spotifyUrl,
+        title: item.title,
+        uri: item.uri,
+      })),
+    };
+  }, [catalogs]);
   const partyTarget = authenticated
     ? allCatalogsReady && playerReady
       ? 100
@@ -491,7 +556,7 @@ export default function Home() {
   }, [authenticated, ensureCatalog]);
 
   useEffect(() => {
-    if (!authenticated) return;
+    if (!authenticated || auditMode) return;
     let disposed = false;
 
     void loadSpotifySdk()
@@ -627,7 +692,7 @@ export default function Home() {
       deviceIdRef.current = "";
       setPlayerReady(false);
     };
-  }, [authenticated]);
+  }, [auditMode, authenticated]);
 
   useEffect(() => {
     const ticker = window.setInterval(() => {
@@ -716,6 +781,7 @@ export default function Home() {
   useEffect(() => {
     if (
       !entered ||
+      auditMode ||
       !authenticated ||
       !playerReady ||
       !allCatalogsReady ||
@@ -735,6 +801,7 @@ export default function Home() {
     return () => window.clearTimeout(launchTimer);
   }, [
     allCatalogsReady,
+    auditMode,
     authenticated,
     entered,
     partyProgress,
@@ -808,6 +875,61 @@ export default function Home() {
     if (authenticated && playerReady && activeCatalog.length) {
       await playQueueAt(currentTrack, selectedArtist);
     }
+  };
+
+  const connectAudit = async () => {
+    sessionStorage.setItem(AUDIT_MODE_KEY, "1");
+    setAuditMode(true);
+    setEntered(true);
+    void videoRef.current?.play();
+    if (!authenticated && !authChecking) {
+      await beginSpotifyAuthorization(selectedArtist);
+    }
+  };
+
+  const downloadAudit = () => {
+    if (!allCatalogsReady) return;
+    const blob = new Blob([JSON.stringify(auditReport, null, 2)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `mehak-spotify-preview-audit-${new Date()
+      .toISOString()
+      .slice(0, 10)}.json`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const copyAuditSummary = async () => {
+    if (!allCatalogsReady) return;
+    const summary = auditReport.summary;
+    const message = [
+      "MEHAK SPOTIFY PREVIEW AUDIT",
+      `${summary.catalogEntries} catalog entries`,
+      `${summary.uniqueTracks} unique tracks`,
+      `${summary.uniqueTracksWithPreview} Spotify preview files available`,
+      `${summary.uniqueTracksWithoutPreview} without preview files`,
+      `${summary.previewCoveragePercent}% preview coverage`,
+    ].join(" · ");
+    try {
+      await navigator.clipboard.writeText(message);
+      setAuditCopied(true);
+      window.setTimeout(() => setAuditCopied(false), 1800);
+    } catch {
+      setAuditCopied(false);
+    }
+  };
+
+  const exitAudit = () => {
+    sessionStorage.removeItem(AUDIT_MODE_KEY);
+    const url = new URL(window.location.href);
+    url.searchParams.delete("audit");
+    history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+    setAuditMode(false);
   };
 
   const playLaserSound = () => {
@@ -1111,7 +1233,7 @@ export default function Home() {
           ? "TAP JUKEBOX PLAY TO DROP THE NEEDLE"
           : "DROPPING THE NEEDLE";
   const showPartyCountdown =
-    entered && authenticated && !partyOverlayDismissed;
+    entered && authenticated && !partyOverlayDismissed && !auditMode;
   const displayTitle = track?.title ?? `${artist.name} FULL ARCHIVE`;
   const displayArtist = track?.artists ?? "ALL UNIQUE CREDITED TRACKS";
   const displayAlbum = track
@@ -1124,7 +1246,7 @@ export default function Home() {
       ref={experienceRef}
       className={`experience${entered ? " is-live" : ""}${
         spotifyPlaying ? " is-playing" : ""
-      }`}
+      }${auditMode ? " is-auditing" : ""}`}
       onPointerMove={handlePointerMove}
       onPointerLeave={resetPerspective}
     >
@@ -1224,6 +1346,130 @@ export default function Home() {
             <span>SOLOMUN {Math.round(solomunPartyProgress)}%</span>
           </div>
         </div>
+      ) : null}
+
+      {auditMode ? (
+        <section
+          className="availability-audit"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="audit-title"
+        >
+          <div className="audit-panel">
+            <div className="audit-header">
+              <div>
+                <span className="audit-kicker">PRIVATE DIAGNOSTIC · NOT SHOWN TO VISITORS</span>
+                <h2 id="audit-title">ANONYMOUS AUDIO AUDIT</h2>
+              </div>
+              <button type="button" onClick={exitAudit} aria-label="Close audit mode">
+                CLOSE
+              </button>
+            </div>
+
+            <p className="audit-intro">
+              One final authorized scan will count which ARTBAT and Solomun
+              tracks currently include a Spotify-supplied anonymous preview file.
+              The live jukebox is not being replaced during this test.
+            </p>
+
+            {authChecking ? (
+              <div className="audit-wait" role="status">
+                <span className="audit-spinner" aria-hidden="true" />
+                CHECKING THE CURRENT SPOTIFY SESSION
+              </div>
+            ) : !authenticated ? (
+              <div className="audit-connect">
+                <p>
+                  Spotify requires one last sign-in to expose the complete
+                  497-entry catalogue for this private audit.
+                </p>
+                <button type="button" onClick={() => void connectAudit()}>
+                  CONNECT FOR ONE LAST SCAN
+                </button>
+                <small>Normal website visitors will never see this audit screen.</small>
+              </div>
+            ) : !allCatalogsReady ? (
+              <div className="audit-scanning" role="status" aria-live="polite">
+                <div className="audit-progress-number">
+                  <span>SCANNING BOTH ARTIST ARCHIVES</span>
+                  <strong>{auditProgress}%</strong>
+                </div>
+                <div className="audit-progress-rail" aria-hidden="true">
+                  <span style={{ width: `${auditProgress}%` }} />
+                </div>
+                <div className="audit-artist-progress">
+                  <span>ARTBAT {Math.round(artbatPartyProgress)}%</span>
+                  <span>SOLOMUN {Math.round(solomunPartyProgress)}%</span>
+                </div>
+                <p>{playerMessage}</p>
+              </div>
+            ) : (
+              <div className="audit-results" aria-live="polite">
+                <div className="audit-result-grid">
+                  <article>
+                    <span>CATALOGUE ENTRIES</span>
+                    <strong>{auditReport.summary.catalogEntries}</strong>
+                  </article>
+                  <article className="has-preview">
+                    <span>PREVIEW FILE AVAILABLE</span>
+                    <strong>{auditReport.summary.uniqueTracksWithPreview}</strong>
+                  </article>
+                  <article className="no-preview">
+                    <span>NO PREVIEW FILE</span>
+                    <strong>{auditReport.summary.uniqueTracksWithoutPreview}</strong>
+                  </article>
+                  <article>
+                    <span>UNIQUE TRACKS</span>
+                    <strong>{auditReport.summary.uniqueTracks}</strong>
+                  </article>
+                </div>
+
+                <div className="audit-coverage">
+                  <div>
+                    <span>ANONYMOUS PREVIEW COVERAGE</span>
+                    <strong>{auditReport.summary.previewCoveragePercent}%</strong>
+                  </div>
+                  <div className="audit-progress-rail" aria-hidden="true">
+                    <span
+                      style={{
+                        width: `${auditReport.summary.previewCoveragePercent}%`,
+                      }}
+                    />
+                  </div>
+                </div>
+
+                <div className="audit-breakdown">
+                  <span>
+                    ARTBAT · {auditReport.artists.artbat.previews}/
+                    {auditReport.artists.artbat.entries}
+                  </span>
+                  <span>
+                    SOLOMUN · {auditReport.artists.solomun.previews}/
+                    {auditReport.artists.solomun.entries}
+                  </span>
+                  <span>
+                    CROSS-ARTIST DUPLICATES · {auditReport.summary.duplicateEntriesAcrossArtists}
+                  </span>
+                </div>
+
+                <div className="audit-actions">
+                  <button type="button" onClick={downloadAudit}>
+                    DOWNLOAD FULL AUDIT JSON
+                  </button>
+                  <button type="button" onClick={() => void copyAuditSummary()}>
+                    {auditCopied ? "RESULT COPIED" : "COPY RESULT FOR CHATGPT"}
+                  </button>
+                </div>
+
+                <p className="audit-note">
+                  This is a current preview-file snapshot, not a permanent promise
+                  of playback in every browser or country. Upload the downloaded
+                  JSON here before we remove Spotify login from the public player.
+                </p>
+              </div>
+            )}
+          </div>
+        </section>
       ) : null}
 
       <div className="content-grid">

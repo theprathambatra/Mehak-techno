@@ -3,7 +3,7 @@ const VERIFIER_STORAGE_KEY = "mehak_spotify_pkce_verifier";
 const STATE_STORAGE_KEY = "mehak_spotify_oauth_state";
 const REDIRECT_STORAGE_KEY = "mehak_spotify_redirect_uri";
 const PENDING_ROOM_KEY = "mehak_spotify_pending_room";
-const CATALOG_CACHE_VERSION = 2;
+const CATALOG_CACHE_VERSION = 3;
 const CATALOG_CACHE_TTL = 24 * 60 * 60 * 1e3;
 const SPOTIFY_CLIENT_ID = "d7993980b50b4617908c37aa3c3d3692";
 const SPOTIFY_ARTISTS = [
@@ -335,6 +335,7 @@ async function fetchArtistCatalog(artist, onProgress) {
       durationMs: track.duration_ms,
       explicit: track.explicit,
       id: track.id,
+      previewUrl: track.preview_url ?? null,
       releaseDate: album.release_date || "9999",
       spotifyUrl: track.external_urls?.spotify ?? `https://open.spotify.com/track/${track.id}`,
       title: track.name,

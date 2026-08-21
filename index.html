@@ -94,6 +94,120 @@
         </div>
       </div>
 
+      <section
+        class="availability-audit"
+        id="availability-audit"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="audit-title"
+        hidden
+      >
+        <div class="audit-panel">
+          <div class="audit-header">
+            <div>
+              <span class="audit-kicker">PRIVATE DIAGNOSTIC · NOT SHOWN TO VISITORS</span>
+              <h2 id="audit-title">ANONYMOUS AUDIO AUDIT</h2>
+            </div>
+            <button type="button" id="audit-close-button">CLOSE</button>
+          </div>
+
+          <p class="audit-intro">
+            One final authorized scan will count which ARTBAT and Solomun tracks
+            currently include a Spotify-supplied anonymous preview file. The live
+            jukebox is not being replaced during this test.
+          </p>
+
+          <div class="audit-wait" id="audit-wait" role="status">
+            <span class="audit-spinner" aria-hidden="true"></span>
+            CHECKING THE CURRENT SPOTIFY SESSION
+          </div>
+
+          <div class="audit-connect" id="audit-connect" hidden>
+            <p>
+              Spotify requires one last sign-in to expose the complete 497-entry
+              catalogue for this private audit.
+            </p>
+            <button type="button" id="audit-connect-button">
+              CONNECT FOR ONE LAST SCAN
+            </button>
+            <small>Normal website visitors will never see this audit screen.</small>
+          </div>
+
+          <div
+            class="audit-scanning"
+            id="audit-scanning"
+            role="status"
+            aria-live="polite"
+            hidden
+          >
+            <div class="audit-progress-number">
+              <span>SCANNING BOTH ARTIST ARCHIVES</span>
+              <strong id="audit-progress-number">0%</strong>
+            </div>
+            <div class="audit-progress-rail" aria-hidden="true">
+              <span id="audit-progress-fill" style="width: 0%"></span>
+            </div>
+            <div class="audit-artist-progress">
+              <span id="audit-artbat-progress">ARTBAT 0%</span>
+              <span id="audit-solomun-progress">SOLOMUN 0%</span>
+            </div>
+            <p id="audit-status">LOADING FULL ARTIST ARCHIVES</p>
+          </div>
+
+          <div class="audit-results" id="audit-results" aria-live="polite" hidden>
+            <div class="audit-result-grid">
+              <article>
+                <span>CATALOGUE ENTRIES</span>
+                <strong id="audit-entry-count">0</strong>
+              </article>
+              <article class="has-preview">
+                <span>PREVIEW FILE AVAILABLE</span>
+                <strong id="audit-preview-count">0</strong>
+              </article>
+              <article class="no-preview">
+                <span>NO PREVIEW FILE</span>
+                <strong id="audit-missing-count">0</strong>
+              </article>
+              <article>
+                <span>UNIQUE TRACKS</span>
+                <strong id="audit-unique-count">0</strong>
+              </article>
+            </div>
+
+            <div class="audit-coverage">
+              <div>
+                <span>ANONYMOUS PREVIEW COVERAGE</span>
+                <strong id="audit-coverage-number">0%</strong>
+              </div>
+              <div class="audit-progress-rail" aria-hidden="true">
+                <span id="audit-coverage-fill" style="width: 0%"></span>
+              </div>
+            </div>
+
+            <div class="audit-breakdown">
+              <span id="audit-artbat-result">ARTBAT · 0/0</span>
+              <span id="audit-solomun-result">SOLOMUN · 0/0</span>
+              <span id="audit-duplicate-result">CROSS-ARTIST DUPLICATES · 0</span>
+            </div>
+
+            <div class="audit-actions">
+              <button type="button" id="audit-download-button">
+                DOWNLOAD FULL AUDIT JSON
+              </button>
+              <button type="button" id="audit-copy-button">
+                COPY RESULT FOR CHATGPT
+              </button>
+            </div>
+
+            <p class="audit-note">
+              This is a current preview-file snapshot, not a permanent promise of
+              playback in every browser or country. Upload the downloaded JSON here
+              before we remove Spotify login from the public player.
+            </p>
+          </div>
+        </div>
+      </section>
+
       <div class="content-grid">
         <section class="title-block" aria-labelledby="main-title">
           <p class="eyebrow">

@@ -11,6 +11,7 @@ import {
 } from "./spotify.js";
 
 const PLAYBACK_BATCH_SIZE = 50;
+const AUDIT_MODE_KEY = "mehak_spotify_preview_audit_v1";
 
 const weatherLabels = {
   0: "CLEAR SKY",
@@ -70,6 +71,29 @@ const partyCountdownFill = document.getElementById("party-countdown-fill");
 const artbatPartyProgress = document.getElementById("artbat-party-progress");
 const deckPartyProgress = document.getElementById("deck-party-progress");
 const solomunPartyProgress = document.getElementById("solomun-party-progress");
+const availabilityAudit = document.getElementById("availability-audit");
+const auditWait = document.getElementById("audit-wait");
+const auditConnect = document.getElementById("audit-connect");
+const auditScanning = document.getElementById("audit-scanning");
+const auditResults = document.getElementById("audit-results");
+const auditCloseButton = document.getElementById("audit-close-button");
+const auditConnectButton = document.getElementById("audit-connect-button");
+const auditDownloadButton = document.getElementById("audit-download-button");
+const auditCopyButton = document.getElementById("audit-copy-button");
+const auditProgressNumber = document.getElementById("audit-progress-number");
+const auditProgressFill = document.getElementById("audit-progress-fill");
+const auditArtbatProgress = document.getElementById("audit-artbat-progress");
+const auditSolomunProgress = document.getElementById("audit-solomun-progress");
+const auditStatus = document.getElementById("audit-status");
+const auditEntryCount = document.getElementById("audit-entry-count");
+const auditPreviewCount = document.getElementById("audit-preview-count");
+const auditMissingCount = document.getElementById("audit-missing-count");
+const auditUniqueCount = document.getElementById("audit-unique-count");
+const auditCoverageNumber = document.getElementById("audit-coverage-number");
+const auditCoverageFill = document.getElementById("audit-coverage-fill");
+const auditArtbatResult = document.getElementById("audit-artbat-result");
+const auditSolomunResult = document.getElementById("audit-solomun-result");
+const auditDuplicateResult = document.getElementById("audit-duplicate-result");
 const recordBay = document.getElementById("record-bay");
 const record = document.getElementById("record");
 const recordLabel = document.getElementById("record-label");
@@ -126,6 +150,11 @@ let autoLaunchAttempted = false;
 let autoPartyLaunchStarted = false;
 let partyDismissTimer;
 let scratchAudio = null;
+const auditRequested = new URLSearchParams(window.location.search).get("audit") === "1";
+if (auditRequested) sessionStorage.setItem(AUDIT_MODE_KEY, "1");
+let auditMode =
+  auditRequested || sessionStorage.getItem(AUDIT_MODE_KEY) === "1";
+let auditReport = null;
 const scratchGesture = {
   active: false,
   centerX: 0,
@@ -184,6 +213,100 @@ const setStatus = (message) => {
   jukeboxStatus.title = shown;
 };
 
+const buildAuditReport = () => {
+  const artbatTracks = catalogs.artbat ?? [];
+  const solomunTracks = catalogs.solomun ?? [];
+  const entries = [...artbatTracks, ...solomunTracks];
+  const uniqueTracks = new Map();
+
+  entries.forEach((track) => {
+    const existing = uniqueTracks.get(track.id);
+    if (!existing || (!existing.previewUrl && track.previewUrl)) {
+      uniqueTracks.set(track.id, track);
+    }
+  });
+
+  const unique = Array.from(uniqueTracks.values());
+  const previewTracks = unique.filter((track) => Boolean(track.previewUrl));
+
+  return {
+    auditVersion: 1,
+    generatedAt: new Date().toISOString(),
+    source: "Spotify Web API preview_url availability snapshot",
+    artists: {
+      artbat: {
+        entries: artbatTracks.length,
+        previews: artbatTracks.filter((track) => Boolean(track.previewUrl)).length,
+      },
+      solomun: {
+        entries: solomunTracks.length,
+        previews: solomunTracks.filter((track) => Boolean(track.previewUrl)).length,
+      },
+    },
+    summary: {
+      catalogEntries: entries.length,
+      duplicateEntriesAcrossArtists: entries.length - unique.length,
+      uniqueTracks: unique.length,
+      uniqueTracksWithPreview: previewTracks.length,
+      uniqueTracksWithoutPreview: unique.length - previewTracks.length,
+      previewCoveragePercent: unique.length
+        ? Math.round((previewTracks.length / unique.length) * 1000) / 10
+        : 0,
+    },
+    tracks: unique.map((track) => ({
+      album: track.album,
+      artists: track.artists,
+      id: track.id,
+      previewUrl: track.previewUrl,
+      releaseDate: track.releaseDate,
+      spotifyUrl: track.spotifyUrl,
+      title: track.title,
+      uri: track.uri,
+    })),
+  };
+};
+
+const renderAudit = () => {
+  availabilityAudit.hidden = !auditMode;
+  experience.classList.toggle("is-auditing", auditMode);
+  if (!auditMode) return;
+
+  experience.classList.add("is-live");
+  entryGate.classList.add("is-open");
+  void spiralVideo.play().catch(() => {});
+
+  const allCatalogsReady = SPOTIFY_ARTISTS.every(
+    (artist) => catalogs[artist.key]?.length,
+  );
+  auditWait.hidden = !authChecking;
+  auditConnect.hidden = authChecking || authenticated;
+  auditScanning.hidden = authChecking || !authenticated || allCatalogsReady;
+  auditResults.hidden = !authenticated || !allCatalogsReady;
+
+  const progress = Math.round(
+    ((artistProgress.artbat ?? 0) + (artistProgress.solomun ?? 0)) / 2,
+  );
+  auditProgressNumber.textContent = `${progress}%`;
+  auditProgressFill.style.width = `${progress}%`;
+  auditArtbatProgress.textContent = `ARTBAT ${Math.round(artistProgress.artbat ?? 0)}%`;
+  auditSolomunProgress.textContent = `SOLOMUN ${Math.round(artistProgress.solomun ?? 0)}%`;
+  auditStatus.textContent = playerMessage;
+
+  if (!allCatalogsReady) return;
+  if (!auditReport) auditReport = buildAuditReport();
+  const { artists, summary } = auditReport;
+  auditEntryCount.textContent = String(summary.catalogEntries);
+  auditPreviewCount.textContent = String(summary.uniqueTracksWithPreview);
+  auditMissingCount.textContent = String(summary.uniqueTracksWithoutPreview);
+  auditUniqueCount.textContent = String(summary.uniqueTracks);
+  auditCoverageNumber.textContent = `${summary.previewCoveragePercent}%`;
+  auditCoverageFill.style.width = `${summary.previewCoveragePercent}%`;
+  auditArtbatResult.textContent = `ARTBAT · ${artists.artbat.previews}/${artists.artbat.entries}`;
+  auditSolomunResult.textContent = `SOLOMUN · ${artists.solomun.previews}/${artists.solomun.entries}`;
+  auditDuplicateResult.textContent =
+    `CROSS-ARTIST DUPLICATES · ${summary.duplicateEntriesAcrossArtists}`;
+};
+
 const getPartyTarget = () => {
   if (!authenticated) return 0;
   const allCatalogsReady = SPOTIFY_ARTISTS.every(
@@ -207,7 +330,8 @@ const renderPartyCountdown = () => {
   const visible =
     experience.classList.contains("is-live") &&
     authenticated &&
-    !partyOverlayDismissed;
+    !partyOverlayDismissed &&
+    !auditMode;
   partyCountdown.hidden = !visible;
   if (!visible) return;
 
@@ -240,12 +364,14 @@ const updatePartyCountdown = () => {
     );
   }
   renderPartyCountdown();
+  renderAudit();
 
   const allCatalogsReady = SPOTIFY_ARTISTS.every(
     (artist) => catalogs[artist.key]?.length,
   );
   if (
     experience.classList.contains("is-live") &&
+    !auditMode &&
     authenticated &&
     playerReady &&
     allCatalogsReady &&
@@ -412,6 +538,7 @@ const ensureCatalog = async (key) => {
       renderPartyCountdown();
     });
     catalogs = { ...catalogs, [key]: tracks };
+    auditReport = null;
     artistProgress[key] = 100;
     catalogProgress[key] = `${tracks.length} TRACKS READY`;
     if (selectedArtist === key) {
@@ -964,6 +1091,65 @@ const nudgeVinyl = (direction) => {
   }, 150);
 };
 
+const connectAudit = async () => {
+  sessionStorage.setItem(AUDIT_MODE_KEY, "1");
+  auditMode = true;
+  renderAudit();
+  if (!authenticated && !authChecking) {
+    await beginSpotifyAuthorization(selectedArtist);
+  }
+};
+
+const downloadAudit = () => {
+  auditReport ??= buildAuditReport();
+  const blob = new Blob([JSON.stringify(auditReport, null, 2)], {
+    type: "application/json",
+  });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `mehak-spotify-preview-audit-${new Date()
+    .toISOString()
+    .slice(0, 10)}.json`;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+};
+
+const copyAuditSummary = async () => {
+  auditReport ??= buildAuditReport();
+  const summary = auditReport.summary;
+  const message = [
+    "MEHAK SPOTIFY PREVIEW AUDIT",
+    `${summary.catalogEntries} catalog entries`,
+    `${summary.uniqueTracks} unique tracks`,
+    `${summary.uniqueTracksWithPreview} Spotify preview files available`,
+    `${summary.uniqueTracksWithoutPreview} without preview files`,
+    `${summary.previewCoveragePercent}% preview coverage`,
+  ].join(" · ");
+  try {
+    await navigator.clipboard.writeText(message);
+    auditCopyButton.textContent = "RESULT COPIED";
+    window.setTimeout(() => {
+      auditCopyButton.textContent = "COPY RESULT FOR CHATGPT";
+    }, 1800);
+  } catch {
+    auditCopyButton.textContent = "COPY FAILED · DOWNLOAD JSON";
+  }
+};
+
+const closeAudit = () => {
+  sessionStorage.removeItem(AUDIT_MODE_KEY);
+  const url = new URL(window.location.href);
+  url.searchParams.delete("audit");
+  history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+  auditMode = false;
+  renderAudit();
+  renderPartyCountdown();
+  if (authenticated && !spotifyPlayer) void initializePlayer();
+};
+
 window.setTimeout(() => {
   enterButton.classList.add("is-ready");
   enterButton.disabled = authChecking;
@@ -1013,6 +1199,10 @@ artistButtons.forEach((button) =>
 );
 environmentStrip.addEventListener("click", requestWeather);
 laserButton.addEventListener("click", shootLasers);
+auditConnectButton.addEventListener("click", () => void connectAudit());
+auditDownloadButton.addEventListener("click", downloadAudit);
+auditCopyButton.addEventListener("click", () => void copyAuditSummary());
+auditCloseButton.addEventListener("click", closeAudit);
 recordBay.addEventListener("pointerdown", startVinylScratch);
 recordBay.addEventListener("pointermove", moveVinylScratch);
 recordBay.addEventListener("pointerup", finishVinylScratch);
@@ -1061,6 +1251,7 @@ experience.addEventListener("pointerleave", () => {
 const initialize = async () => {
   updateClock();
   renderTrack();
+  renderAudit();
 
   if (wasRoomPending()) {
     experience.classList.add("is-live");
@@ -1085,14 +1276,16 @@ const initialize = async () => {
     enterButton.disabled = false;
     enterButton.setAttribute("aria-busy", "false");
     renderTrack();
+    renderAudit();
   }
 
   if (!authenticated) return;
 
-  void initializePlayer();
+  if (!auditMode) void initializePlayer();
   await Promise.all(
     SPOTIFY_ARTISTS.map((artist) => ensureCatalog(artist.key)),
   );
+  renderAudit();
 };
 
 void initialize();
