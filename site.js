@@ -68,6 +68,7 @@ const partyCountdown = document.getElementById("party-countdown");
 const partyCountdownLabel = document.getElementById("party-countdown-label");
 const partyCountdownNumber = document.getElementById("party-countdown-number");
 const partyCountdownFill = document.getElementById("party-countdown-fill");
+const partyStartButton = document.getElementById("party-start-button");
 const artbatPartyProgress = document.getElementById("artbat-party-progress");
 const deckPartyProgress = document.getElementById("deck-party-progress");
 const solomunPartyProgress = document.getElementById("solomun-party-progress");
@@ -346,30 +347,37 @@ const getPartyTarget = () => {
 const renderPartyCountdown = () => {
   const visible =
     experience.classList.contains("is-live") &&
-    authenticated &&
+    (authenticated || authChecking) &&
     !partyOverlayDismissed &&
     !auditMode;
   partyCountdown.hidden = !visible;
-  if (!visible) return;
+  if (!visible) {
+    partyStartButton.hidden = true;
+    return;
+  }
 
   const needsTap =
     autoLaunchAttempted &&
-    /PRESS PLAY|ANOTHER TAP|AUTOPLAY/.test(playerMessage.toUpperCase());
+    /PRESS PLAY|ANOTHER TAP|AUTOPLAY|PLAYBACK|PLAYER COMMAND|RESTRICTION|FAILED|ERROR/.test(
+      playerMessage.toUpperCase(),
+    );
   partyCountdownLabel.textContent =
     partyProgress < 100
       ? "COUNTDOWN TO THE PARTY"
       : spotifyPlaying
         ? "PARTY ONLINE"
         : needsTap
-          ? "TAP JUKEBOX PLAY TO DROP THE NEEDLE"
+          ? "ONE TAP TO START THE PARTY"
           : "DROPPING THE NEEDLE";
-  partyCountdownNumber.textContent = String(partyProgress);
+  partyCountdownNumber.textContent = compactNumber(partyProgress);
   partyCountdownFill.style.width = `${partyProgress}%`;
   artbatPartyProgress.textContent = `ARTBAT ${Math.round(artistProgress.artbat ?? 0)}%`;
   solomunPartyProgress.textContent = `SOLOMUN ${Math.round(artistProgress.solomun ?? 0)}%`;
   deckPartyProgress.textContent = playerReady ? "DECK READY" : "DECK WARMING";
   deckPartyProgress.classList.toggle("is-ready", playerReady);
   partyCountdown.classList.toggle("is-ready", partyProgress >= 100);
+  partyCountdown.classList.toggle("is-revealing", spotifyPlaying);
+  partyStartButton.hidden = !needsTap;
 };
 
 const updatePartyCountdown = () => {
@@ -1191,6 +1199,10 @@ window.setInterval(() => {
 }, 250);
 
 enterButton.addEventListener("click", async () => {
+  partyProgress = 0;
+  partyOverlayDismissed = false;
+  autoLaunchAttempted = false;
+  autoPartyLaunchStarted = false;
   experience.classList.add("is-live");
   entryGate.classList.add("is-open");
   renderPartyCountdown();
@@ -1201,12 +1213,13 @@ enterButton.addEventListener("click", async () => {
     await beginSpotifyAuthorization(selectedArtist);
     return;
   }
-  if (authenticated && playerReady && getCatalog().length) {
-    await playQueueAt(currentTrack, selectedArtist);
+  if (authenticated && spotifyPlayer) {
+    await spotifyPlayer.activateElement().catch(() => {});
   }
 });
 
 playbackButton.addEventListener("click", () => void togglePlayback());
+partyStartButton.addEventListener("click", () => void togglePlayback());
 previousButton.addEventListener("click", () =>
   void playQueueAt(currentTrack - 1, selectedArtist),
 );
@@ -1275,6 +1288,7 @@ const initialize = async () => {
   if (wasRoomPending()) {
     experience.classList.add("is-live");
     entryGate.classList.add("is-open");
+    renderPartyCountdown();
     clearPendingRoom();
     void spiralVideo.play().catch(() => {});
     if (!weatherRequested) requestWeather();
