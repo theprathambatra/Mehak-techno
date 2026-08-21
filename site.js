@@ -8,7 +8,7 @@ import {
   SPOTIFY_ARTISTS,
   spotifyApi,
   wasRoomPending,
-} from "./spotify.js?v=4";
+} from "./spotify.js?v=5";
 
 const PLAYBACK_BATCH_SIZE = 50;
 const AUDIT_MODE_KEY = "mehak_spotify_preview_audit_v1";
@@ -135,6 +135,7 @@ let catalogProgress = {};
 let artistProgress = { artbat: 0, solomun: 0 };
 let loadingCatalogs = new Set();
 let currentTrack = 0;
+let liveTrack = null;
 let progressMs = 0;
 let durationMs = 0;
 let progressAnchor = { at: 0, position: 0 };
@@ -358,7 +359,7 @@ const renderPartyCountdown = () => {
 
   const needsTap =
     autoLaunchAttempted &&
-    /PRESS PLAY|ANOTHER TAP|AUTOPLAY|PLAYBACK|PLAYER COMMAND|RESTRICTION|FAILED|ERROR/.test(
+    /PRESS PLAY|ANOTHER TAP|AUTOPLAY|PLAYBACK|PLAYER COMMAND|RESTRICTION|FAILED|ERROR|QUOTA|TOO MANY|BUSY|FORBIDDEN|403|429/.test(
       playerMessage.toUpperCase(),
     );
   partyCountdownLabel.textContent =
@@ -402,15 +403,26 @@ const updatePartyCountdown = () => {
     !auditMode &&
     authenticated &&
     playerReady &&
-    allCatalogsReady &&
-    partyProgress >= 100 &&
+    partyProgress >= 92 &&
     !autoPartyLaunchStarted
   ) {
     autoPartyLaunchStarted = true;
     autoLaunchAttempted = true;
-    setStatus("100% · DROPPING THE NEEDLE");
+    setStatus(
+      allCatalogsReady
+        ? "100% · DROPPING THE NEEDLE"
+        : "ARCHIVE SYNC MOVED BACKSTAGE · STARTING MUSIC",
+    );
     renderPartyCountdown();
-    window.setTimeout(() => void playQueueAt(0, selectedArtist), 520);
+    window.setTimeout(() => {
+      if (allCatalogsReady) {
+        partyProgress = 100;
+        renderPartyCountdown();
+        void playQueueAt(0, selectedArtist);
+      } else {
+        void playArtistContext(selectedArtist);
+      }
+    }, 240);
   }
 };
 
@@ -468,18 +480,24 @@ const renderTrack = () => {
   const artist = getArtist();
   const catalog = getCatalog();
   const track = catalog[currentTrack];
-  const displayTitle = track?.title ?? `${artist.name} FULL ARCHIVE`;
-  const displayArtist = track?.artists ?? "ALL UNIQUE CREDITED TRACKS";
+  const liveTrackUrl = liveTrack?.uri?.startsWith("spotify:track:")
+    ? `https://open.spotify.com/track/${liveTrack.uri.slice("spotify:track:".length)}`
+    : artist.url;
+  const displayTitle = track?.title ?? liveTrack?.name ?? `${artist.name} FULL ARCHIVE`;
+  const displayArtist =
+    track?.artists ??
+    liveTrack?.artists?.map((item) => item.name).join(" · ") ??
+    "ALL UNIQUE CREDITED TRACKS";
   const displayAlbum = track
     ? `${track.album} · ${track.releaseDate.slice(0, 4)}`
-    : "OLDEST TO NEWEST · FULL-LENGTH PLAYBACK";
+    : liveTrack?.album?.name ?? "OLDEST TO NEWEST · FULL-LENGTH PLAYBACK";
 
   recordLabel.textContent = artist.name.slice(0, 1);
   trackNumber.textContent = catalog.length ? compactNumber(currentTrack + 1) : "--";
   trackTotal.textContent = catalog.length ? compactNumber(catalog.length) : "--";
   trackLink.textContent = displayTitle;
-  trackLink.href = track?.spotifyUrl ?? artist.url;
-  spotifyLink.href = track?.spotifyUrl ?? artist.url;
+  trackLink.href = track?.spotifyUrl ?? liveTrackUrl;
+  spotifyLink.href = track?.spotifyUrl ?? liveTrackUrl;
   trackMeta.title = `${displayArtist} · ${displayAlbum}`;
   trackMeta.replaceChildren(
     document.createTextNode(`${displayArtist} `),
@@ -499,11 +517,14 @@ const renderTrack = () => {
     100,
     (progressMs / Math.max(1, durationMs)) * 100,
   )}%`;
-  previousButton.disabled = !playerReady || !catalog.length;
-  nextButton.disabled = !playerReady || !catalog.length;
+  previousButton.disabled = !playerReady;
+  nextButton.disabled = !playerReady;
   playbackButton.disabled = authChecking || (authenticated && !playerReady);
   playbackButton.classList.toggle("needs-login", !authenticated);
-  onlineDot.classList.toggle("is-waiting", !playerReady || !catalog.length);
+  onlineDot.classList.toggle(
+    "is-waiting",
+    !playerReady || (!catalog.length && !spotifyPlaying),
+  );
   renderArtistTabs();
   setStatus(playerMessage);
 };
@@ -585,6 +606,10 @@ const ensureCatalog = async (key) => {
   } catch (error) {
     const message =
       error instanceof Error ? error.message.toUpperCase() : "CATALOG OFFLINE";
+    console.warn("[spotify:catalog] archive sync deferred", {
+      artist: key,
+      message,
+    });
     catalogProgress[key] = message;
     setStatus(message);
     if (/SESSION|CONNECT/.test(message)) {
@@ -595,6 +620,55 @@ const ensureCatalog = async (key) => {
     return null;
   } finally {
     loadingCatalogs.delete(key);
+  }
+};
+
+const playArtistContext = async (key = selectedArtist) => {
+  if (!authenticated) {
+    await beginSpotifyAuthorization(key);
+    return false;
+  }
+  if (!spotifyPlayer || !deviceId) {
+    setStatus("PLAYER IS STILL WARMING UP");
+    return false;
+  }
+
+  const artist = getArtist(key);
+  try {
+    await spotifyPlayer.activateElement();
+    playingArtist = key;
+    setStatus(`${artist.name} · STARTING NOW`);
+    await spotifyApi(
+      `https://api.spotify.com/v1/me/player/play?device_id=${encodeURIComponent(deviceId)}`,
+      {
+        method: "PUT",
+        body: JSON.stringify({
+          context_uri: `spotify:artist:${artist.id}`,
+          position_ms: 0,
+        }),
+      },
+    );
+    partyProgress = 100;
+    void spotifyApi(
+      `https://api.spotify.com/v1/me/player/shuffle?state=false&device_id=${encodeURIComponent(deviceId)}`,
+      { method: "PUT" },
+    ).catch(() => {});
+    renderPartyCountdown();
+    return true;
+  } catch (error) {
+    partyProgress = 100;
+    setPlaying(false);
+    console.warn("[spotify:playback] artist context could not start", {
+      artist: key,
+      message: error instanceof Error ? error.message : String(error),
+    });
+    setStatus(
+      error instanceof Error
+        ? error.message.toUpperCase()
+        : "PLAYBACK NEEDS ANOTHER TAP",
+    );
+    renderPartyCountdown();
+    return false;
   }
 };
 
@@ -698,12 +772,14 @@ const initializePlayer = async () => {
         (track) => track.uri === state.track_window.current_track.uri,
       );
 
+      liveTrack = state.track_window.current_track;
+      progressMs = state.position;
+      durationMs = state.duration;
+      progressAnchor = { at: performance.now(), position: state.position };
+      setPlaying(!state.paused);
+
       if (index >= 0 && selectedArtist === playingArtist) {
         currentTrack = index;
-        progressMs = state.position;
-        durationMs = state.duration;
-        progressAnchor = { at: performance.now(), position: state.position };
-        setPlaying(!state.paused);
         setStatus(
           state.paused
             ? `${catalog.length} TRACKS · PAUSED`
@@ -726,9 +802,16 @@ const initializePlayer = async () => {
             });
           }, 120);
         }
-        renderTrack();
+      } else if (selectedArtist === playingArtist) {
+        const artistName = getArtist(playingArtist).name;
+        setStatus(
+          state.paused
+            ? `${artistName} · PAUSED`
+            : `${artistName} · PLAYING WHILE ARCHIVE SYNC CONTINUES`,
+        );
       }
 
+      renderTrack();
       previousState = state;
     });
 
@@ -781,6 +864,7 @@ const selectArtist = (key) => {
   void spotifyPlayer?.pause();
   setPlaying(false);
   selectedArtist = key;
+  liveTrack = null;
   sessionStorage.setItem("mehak_spotify_selected_artist", key);
   currentTrack = 0;
   progressMs = 0;
@@ -814,12 +898,32 @@ const togglePlayback = async () => {
 
   if (
     playingArtist === selectedArtist &&
-    previousState?.track_window.current_track.uri === getTrack()?.uri
+    previousState &&
+    (!getTrack() ||
+      previousState.track_window.current_track.uri === getTrack().uri)
   ) {
     await spotifyPlayer.resume();
+  } else if (!getCatalog().length) {
+    await playArtistContext(selectedArtist);
   } else {
     await playQueueAt(currentTrack, selectedArtist);
   }
+};
+
+const playPrevious = async () => {
+  if (getCatalog().length) {
+    await playQueueAt(currentTrack - 1, selectedArtist);
+    return;
+  }
+  await spotifyPlayer?.previousTrack();
+};
+
+const playNext = async () => {
+  if (getCatalog().length) {
+    await playQueueAt(currentTrack + 1, selectedArtist);
+    return;
+  }
+  await spotifyPlayer?.nextTrack();
 };
 
 const requestWeather = () => {
@@ -1224,10 +1328,10 @@ enterButton.addEventListener("click", async () => {
 playbackButton.addEventListener("click", () => void togglePlayback());
 partyStartButton.addEventListener("click", () => void togglePlayback());
 previousButton.addEventListener("click", () =>
-  void playQueueAt(currentTrack - 1, selectedArtist),
+  void playPrevious(),
 );
 nextButton.addEventListener("click", () =>
-  void playQueueAt(currentTrack + 1, selectedArtist),
+  void playNext(),
 );
 artistButtons.forEach((button) =>
   button.addEventListener("click", () => selectArtist(button.dataset.artist)),
