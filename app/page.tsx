@@ -117,6 +117,26 @@ type WeatherState = {
   unit?: string;
 };
 
+type ScratchAudio = {
+  context: AudioContext;
+  filter: BiquadFilterNode;
+  gain: GainNode;
+  oscillator: OscillatorNode;
+  oscillatorGain: GainNode;
+  source: AudioBufferSourceNode;
+};
+
+type ScratchGesture = {
+  active: boolean;
+  centerX: number;
+  centerY: number;
+  lastAngle: number;
+  lastTime: number;
+  pointerId: number;
+  rotation: number;
+  wasPlaying: boolean;
+};
+
 let spotifySdkPromise: Promise<SpotifySdk> | null = null;
 
 function loadSpotifySdk() {
@@ -211,6 +231,13 @@ export default function Home() {
   const [catalogProgress, setCatalogProgress] = useState<
     Partial<Record<ArtistKey, string>>
   >({});
+  const [artistProgress, setArtistProgress] = useState<
+    Partial<Record<ArtistKey, number>>
+  >({});
+  const [partyProgress, setPartyProgress] = useState(0);
+  const [partyOverlayDismissed, setPartyOverlayDismissed] = useState(false);
+  const [autoLaunchAttempted, setAutoLaunchAttempted] = useState(false);
+  const [isScratching, setIsScratching] = useState(false);
   const [currentTrack, setCurrentTrack] = useState(0);
   const [progressMs, setProgressMs] = useState(0);
   const [durationMs, setDurationMs] = useState(0);
@@ -223,6 +250,7 @@ export default function Home() {
 
   const experienceRef = useRef<HTMLElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const recordRef = useRef<HTMLDivElement>(null);
   const playerRef = useRef<SpotifyPlayer | null>(null);
   const deviceIdRef = useRef("");
   const catalogsRef = useRef(catalogs);
@@ -235,6 +263,18 @@ export default function Home() {
   const durationRef = useRef(0);
   const previousStateRef = useRef<SpotifyWebPlaybackState | null>(null);
   const autoAdvanceRef = useRef(false);
+  const autoPartyLaunchRef = useRef(false);
+  const scratchAudioRef = useRef<ScratchAudio | null>(null);
+  const scratchGestureRef = useRef<ScratchGesture>({
+    active: false,
+    centerX: 0,
+    centerY: 0,
+    lastAngle: 0,
+    lastTime: 0,
+    pointerId: -1,
+    rotation: 0,
+    wasPlaying: false,
+  });
   const playAtRef = useRef<
     ((index: number, artist?: ArtistKey) => Promise<void>) | null
   >(null);
@@ -245,6 +285,26 @@ export default function Home() {
   );
   const activeCatalog = catalogs[selectedArtist] ?? [];
   const track = activeCatalog[currentTrack];
+  const artbatPartyProgress = artistProgress.artbat ?? 0;
+  const solomunPartyProgress = artistProgress.solomun ?? 0;
+  const allCatalogsReady = SPOTIFY_ARTISTS.every(
+    (item) => Boolean(catalogs[item.key]?.length),
+  );
+  const partyTarget = authenticated
+    ? allCatalogsReady && playerReady
+      ? 100
+      : Math.min(
+          99,
+          Math.max(
+            2,
+            Math.round(
+              artbatPartyProgress * 0.45 +
+                solomunPartyProgress * 0.45 +
+                (playerReady ? 10 : 0),
+            ),
+          ),
+        )
+    : 0;
 
   useEffect(() => {
     const gateTimer = window.setTimeout(() => setGateReady(true), 520);
@@ -330,6 +390,38 @@ export default function Home() {
     if (!weatherRequestedRef.current) requestWeather();
   }, [entered, requestWeather]);
 
+  useEffect(() => {
+    if (!entered || !authenticated || partyOverlayDismissed) return;
+
+    const progressTimer = window.setInterval(() => {
+      setPartyProgress((current) => {
+        if (current >= partyTarget) return current;
+        return Math.min(
+          partyTarget,
+          current + Math.max(1, Math.ceil((partyTarget - current) / 10)),
+        );
+      });
+    }, 54);
+
+    return () => window.clearInterval(progressTimer);
+  }, [authenticated, entered, partyOverlayDismissed, partyTarget]);
+
+  useEffect(
+    () => () => {
+      const audio = scratchAudioRef.current;
+      scratchAudioRef.current = null;
+      if (!audio) return;
+      try {
+        audio.source.stop();
+        audio.oscillator.stop();
+      } catch {
+        // Nodes may already be stopped by the gesture release handler.
+      }
+      void audio.context.close();
+    },
+    [],
+  );
+
   const ensureCatalog = useCallback(async (key: ArtistKey) => {
     const existing = catalogsRef.current[key];
     if (existing?.length) return existing;
@@ -341,12 +433,22 @@ export default function Home() {
       ...progress,
       [key]: `SCANNING ${selected.name} RELEASES`,
     }));
+    setArtistProgress((progress) => ({ ...progress, [key]: 1 }));
 
     try {
-      const loaded = await fetchArtistCatalog(selected, (done, total) => {
+      const loaded = await fetchArtistCatalog(selected, (scan) => {
+        setArtistProgress((progress) => ({
+          ...progress,
+          [key]: Math.max(progress[key] ?? 0, scan.percent),
+        }));
         setCatalogProgress((progress) => ({
           ...progress,
-          [key]: `SCANNING RELEASES ${compactNumber(done)}/${compactNumber(total)}`,
+          [key]:
+            scan.phase === "cache"
+              ? "ARCHIVE RESTORED"
+              : scan.phase === "releases"
+                ? `FINDING RELEASES ${compactNumber(scan.completed)}/${compactNumber(scan.total)}`
+                : `CUTTING VINYL ${compactNumber(scan.completed)}/${compactNumber(scan.total)}`,
         }));
       });
       const nextCatalogs = { ...catalogsRef.current, [key]: loaded };
@@ -356,6 +458,7 @@ export default function Home() {
         ...progress,
         [key]: `${loaded.length} TRACKS READY`,
       }));
+      setArtistProgress((progress) => ({ ...progress, [key]: 100 }));
       if (activeArtistRef.current === key) {
         setPlayerMessage(
           playerRef.current
@@ -381,19 +484,11 @@ export default function Home() {
 
   useEffect(() => {
     if (!authenticated) return;
-    let cancelled = false;
 
-    void (async () => {
-      await ensureCatalog(selectedArtist);
-      if (cancelled) return;
-      const other = SPOTIFY_ARTISTS.find((item) => item.key !== selectedArtist)!;
-      await ensureCatalog(other.key);
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [authenticated, ensureCatalog, selectedArtist]);
+    void Promise.all(
+      SPOTIFY_ARTISTS.map((item) => ensureCatalog(item.key)),
+    );
+  }, [authenticated, ensureCatalog]);
 
   useEffect(() => {
     if (!authenticated) return;
@@ -618,6 +713,43 @@ export default function Home() {
     playAtRef.current = playQueueAt;
   }, [playQueueAt]);
 
+  useEffect(() => {
+    if (
+      !entered ||
+      !authenticated ||
+      !playerReady ||
+      !allCatalogsReady ||
+      partyProgress < 100 ||
+      autoPartyLaunchRef.current
+    ) {
+      return;
+    }
+
+    autoPartyLaunchRef.current = true;
+    setAutoLaunchAttempted(true);
+    setPlayerMessage("100% · DROPPING THE NEEDLE");
+    const launchTimer = window.setTimeout(() => {
+      void playAtRef.current?.(0, activeArtistRef.current);
+    }, 520);
+
+    return () => window.clearTimeout(launchTimer);
+  }, [
+    allCatalogsReady,
+    authenticated,
+    entered,
+    partyProgress,
+    playerReady,
+  ]);
+
+  useEffect(() => {
+    if (!spotifyPlaying || partyProgress < 100) return;
+    const dismissTimer = window.setTimeout(
+      () => setPartyOverlayDismissed(true),
+      1100,
+    );
+    return () => window.clearTimeout(dismissTimer);
+  }, [partyProgress, spotifyPlaying]);
+
   const togglePlayback = async () => {
     if (!authenticated) {
       await beginSpotifyAuthorization(selectedArtist);
@@ -703,6 +835,228 @@ export default function Home() {
     playLaserSound();
   };
 
+  const startScratchAudio = () => {
+    if (!("AudioContext" in window)) return null;
+
+    const context = new AudioContext();
+    const source = context.createBufferSource();
+    const noise = context.createBuffer(1, context.sampleRate, context.sampleRate);
+    const channel = noise.getChannelData(0);
+    let previous = 0;
+
+    for (let index = 0; index < channel.length; index += 1) {
+      const raw = Math.random() * 2 - 1;
+      previous = previous * 0.42 + raw * 0.58;
+      channel[index] = raw - previous * 0.72;
+    }
+
+    const filter = context.createBiquadFilter();
+    const gain = context.createGain();
+    const oscillator = context.createOscillator();
+    const oscillatorGain = context.createGain();
+
+    source.buffer = noise;
+    source.loop = true;
+    source.playbackRate.value = 0.8;
+    filter.type = "bandpass";
+    filter.frequency.value = 1250;
+    filter.Q.value = 1.35;
+    gain.gain.value = 0.0001;
+    oscillator.type = "triangle";
+    oscillator.frequency.value = 180;
+    oscillatorGain.gain.value = 0.0001;
+
+    source.connect(filter);
+    filter.connect(gain);
+    gain.connect(context.destination);
+    oscillator.connect(oscillatorGain);
+    oscillatorGain.connect(context.destination);
+    source.start();
+    oscillator.start();
+    void context.resume();
+
+    const audio = {
+      context,
+      filter,
+      gain,
+      oscillator,
+      oscillatorGain,
+      source,
+    };
+    scratchAudioRef.current = audio;
+    return audio;
+  };
+
+  const driveScratchSound = (angleDelta: number, elapsed: number) => {
+    const audio = scratchAudioRef.current;
+    if (!audio) return;
+
+    const velocity = Math.abs(angleDelta) / Math.max(8, elapsed);
+    const intensity = Math.min(1, velocity * 2.7);
+    const directionTone = angleDelta < 0 ? 0.78 : 1.16;
+    const now = audio.context.currentTime;
+    const peak = 0.018 + intensity * 0.15;
+
+    audio.gain.gain.cancelScheduledValues(now);
+    audio.gain.gain.setValueAtTime(
+      Math.max(0.0001, audio.gain.gain.value),
+      now,
+    );
+    audio.gain.gain.linearRampToValueAtTime(peak, now + 0.012);
+    audio.gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.12);
+    audio.oscillatorGain.gain.cancelScheduledValues(now);
+    audio.oscillatorGain.gain.setValueAtTime(
+      Math.max(0.0001, audio.oscillatorGain.gain.value),
+      now,
+    );
+    audio.oscillatorGain.gain.linearRampToValueAtTime(
+      0.004 + intensity * 0.028,
+      now + 0.01,
+    );
+    audio.oscillatorGain.gain.exponentialRampToValueAtTime(
+      0.0001,
+      now + 0.095,
+    );
+    audio.filter.frequency.setTargetAtTime(
+      620 + intensity * 4200,
+      now,
+      0.012,
+    );
+    audio.source.playbackRate.setTargetAtTime(
+      (0.42 + intensity * 2.35) * directionTone,
+      now,
+      0.01,
+    );
+    audio.oscillator.frequency.setTargetAtTime(
+      (120 + intensity * 760) * directionTone,
+      now,
+      0.012,
+    );
+  };
+
+  const stopScratchAudio = () => {
+    const audio = scratchAudioRef.current;
+    scratchAudioRef.current = null;
+    if (!audio) return;
+
+    const now = audio.context.currentTime;
+    audio.gain.gain.cancelScheduledValues(now);
+    audio.gain.gain.setTargetAtTime(0.0001, now, 0.022);
+    audio.oscillatorGain.gain.cancelScheduledValues(now);
+    audio.oscillatorGain.gain.setTargetAtTime(0.0001, now, 0.018);
+    window.setTimeout(() => {
+      try {
+        audio.source.stop();
+        audio.oscillator.stop();
+      } catch {
+        // A rapid second gesture may already have stopped these nodes.
+      }
+      void audio.context.close();
+    }, 90);
+  };
+
+  const startVinylScratch = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!("AudioContext" in window) || scratchGestureRef.current.active) return;
+    event.preventDefault();
+    event.stopPropagation();
+
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const centerX = bounds.left + bounds.width / 2;
+    const centerY = bounds.top + bounds.height / 2;
+    const angle = Math.atan2(
+      event.clientY - centerY,
+      event.clientX - centerX,
+    );
+
+    event.currentTarget.setPointerCapture(event.pointerId);
+    scratchGestureRef.current = {
+      ...scratchGestureRef.current,
+      active: true,
+      centerX,
+      centerY,
+      lastAngle: angle,
+      lastTime: performance.now(),
+      pointerId: event.pointerId,
+      wasPlaying: spotifyPlaying,
+    };
+    setIsScratching(true);
+    startScratchAudio();
+
+    if (spotifyPlaying) {
+      void playerRef.current?.pause();
+      setSpotifyPlaying(false);
+    }
+  };
+
+  const moveVinylScratch = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const gesture = scratchGestureRef.current;
+    if (!gesture.active || gesture.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    event.stopPropagation();
+
+    const angle = Math.atan2(
+      event.clientY - gesture.centerY,
+      event.clientX - gesture.centerX,
+    );
+    let delta = ((angle - gesture.lastAngle) * 180) / Math.PI;
+    delta = ((delta + 540) % 360) - 180;
+    const now = performance.now();
+
+    gesture.rotation += delta;
+    gesture.lastAngle = angle;
+    driveScratchSound(delta, now - gesture.lastTime);
+    gesture.lastTime = now;
+    recordRef.current?.style.setProperty(
+      "--scratch-angle",
+      `${gesture.rotation}deg`,
+    );
+  };
+
+  const finishVinylScratch = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const gesture = scratchGestureRef.current;
+    if (!gesture.active || gesture.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    gesture.active = false;
+    setIsScratching(false);
+    stopScratchAudio();
+
+    if (gesture.wasPlaying) {
+      void playerRef.current?.resume().catch(() => {
+        setPlayerMessage("PRESS PLAY TO RESUME THE ROOM");
+      });
+    }
+  };
+
+  const nudgeVinyl = (direction: -1 | 1) => {
+    if (!("AudioContext" in window) || scratchGestureRef.current.active) return;
+    const gesture = scratchGestureRef.current;
+    gesture.active = true;
+    gesture.wasPlaying = spotifyPlaying;
+    gesture.rotation += direction * 42;
+    recordRef.current?.style.setProperty(
+      "--scratch-angle",
+      `${gesture.rotation}deg`,
+    );
+    setIsScratching(true);
+    startScratchAudio();
+    driveScratchSound(direction * 42, 45);
+    if (spotifyPlaying) {
+      void playerRef.current?.pause();
+      setSpotifyPlaying(false);
+    }
+    window.setTimeout(() => {
+      gesture.active = false;
+      setIsScratching(false);
+      stopScratchAudio();
+      if (gesture.wasPlaying) void playerRef.current?.resume();
+    }, 150);
+  };
+
   const handlePointerMove = (event: ReactPointerEvent<HTMLElement>) => {
     if (event.pointerType === "touch" || !experienceRef.current) return;
     const x = event.clientX / window.innerWidth - 0.5;
@@ -745,6 +1099,19 @@ export default function Home() {
     : !authenticated
       ? playerMessage
       : catalogProgress[selectedArtist] ?? playerMessage;
+  const autoplayNeedsTap =
+    autoLaunchAttempted &&
+    /PRESS PLAY|ANOTHER TAP|AUTOPLAY/.test(playerMessage.toUpperCase());
+  const partyLabel =
+    partyProgress < 100
+      ? "COUNTDOWN TO THE PARTY"
+      : spotifyPlaying
+        ? "PARTY ONLINE"
+        : autoplayNeedsTap
+          ? "TAP JUKEBOX PLAY TO DROP THE NEEDLE"
+          : "DROPPING THE NEEDLE";
+  const showPartyCountdown =
+    entered && authenticated && !partyOverlayDismissed;
   const displayTitle = track?.title ?? `${artist.name} FULL ARCHIVE`;
   const displayArtist = track?.artists ?? "ALL UNIQUE CREDITED TRACKS";
   const displayAlbum = track
@@ -833,6 +1200,32 @@ export default function Home() {
         </p>
       </header>
 
+      {showPartyCountdown ? (
+        <div
+          className={`party-countdown${partyProgress >= 100 ? " is-ready" : ""}`}
+          role="status"
+          aria-live="polite"
+        >
+          <div className="party-countdown-topline">
+            <span>{partyLabel}</span>
+            <strong>
+              {partyProgress}
+              <small>%</small>
+            </strong>
+          </div>
+          <div className="party-countdown-rail" aria-hidden="true">
+            <span style={{ width: `${partyProgress}%` }} />
+          </div>
+          <div className="party-countdown-sources" aria-hidden="true">
+            <span>ARTBAT {Math.round(artbatPartyProgress)}%</span>
+            <span className={playerReady ? "is-ready" : ""}>
+              DECK {playerReady ? "READY" : "WARMING"}
+            </span>
+            <span>SOLOMUN {Math.round(solomunPartyProgress)}%</span>
+          </div>
+        </div>
+      ) : null}
+
       <div className="content-grid">
         <section className="title-block" aria-labelledby="main-title">
           <p className="eyebrow">
@@ -902,15 +1295,42 @@ export default function Home() {
           </div>
 
           <div className="jukebox-body">
-            <div className="record-bay" aria-hidden="true">
-              <div className={spotifyPlaying ? "record is-spinning" : "record"}>
+            <div
+              className={isScratching ? "record-bay is-scratching" : "record-bay"}
+              role="application"
+              tabIndex={0}
+              aria-label="Interactive vinyl. Touch and drag to scratch, or use the left and right arrow keys."
+              onPointerDown={startVinylScratch}
+              onPointerMove={moveVinylScratch}
+              onPointerUp={finishVinylScratch}
+              onPointerCancel={finishVinylScratch}
+              onKeyDown={(event) => {
+                if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+                event.preventDefault();
+                nudgeVinyl(event.key === "ArrowLeft" ? -1 : 1);
+              }}
+            >
+              <div
+                ref={recordRef}
+                className={`record${spotifyPlaying ? " is-spinning" : ""}${
+                  isScratching ? " is-scratching" : ""
+                }`}
+              >
                 <span className="record-groove groove-one" />
                 <span className="record-groove groove-two" />
                 <span className="record-label">{artist.name.slice(0, 1)}</span>
               </div>
-              <div className={spotifyPlaying ? "tonearm is-playing" : "tonearm"}>
+              <div
+                className={`tonearm${spotifyPlaying ? " is-playing" : ""}${
+                  isScratching ? " is-scratching" : ""
+                }`}
+                aria-hidden="true"
+              >
                 <span />
               </div>
+              <span className="scratch-hint" aria-hidden="true">
+                DRAG TO SCRATCH
+              </span>
             </div>
 
             <div className="track-readout" aria-live="polite">

@@ -73,6 +73,27 @@
         </p>
       </header>
 
+      <div
+        class="party-countdown"
+        id="party-countdown"
+        role="status"
+        aria-live="polite"
+        hidden
+      >
+        <div class="party-countdown-topline">
+          <span id="party-countdown-label">COUNTDOWN TO THE PARTY</span>
+          <strong><span id="party-countdown-number">0</span><small>%</small></strong>
+        </div>
+        <div class="party-countdown-rail" aria-hidden="true">
+          <span id="party-countdown-fill" style="width: 0%"></span>
+        </div>
+        <div class="party-countdown-sources" aria-hidden="true">
+          <span id="artbat-party-progress">ARTBAT 0%</span>
+          <span id="deck-party-progress">DECK WARMING</span>
+          <span id="solomun-party-progress">SOLOMUN 0%</span>
+        </div>
+      </div>
+
       <div class="content-grid">
         <section class="title-block" aria-labelledby="main-title">
           <p class="eyebrow">
@@ -132,13 +153,20 @@
           </div>
 
           <div class="jukebox-body">
-            <div class="record-bay" aria-hidden="true">
+            <div
+              class="record-bay"
+              id="record-bay"
+              role="application"
+              tabindex="0"
+              aria-label="Interactive vinyl. Touch and drag to scratch, or use the left and right arrow keys."
+            >
               <div class="record" id="record">
                 <span class="record-groove groove-one"></span>
                 <span class="record-groove groove-two"></span>
                 <span class="record-label" id="record-label">A</span>
               </div>
-              <div class="tonearm" id="tonearm"><span></span></div>
+              <div class="tonearm" id="tonearm" aria-hidden="true"><span></span></div>
+              <span class="scratch-hint" aria-hidden="true">DRAG TO SCRATCH</span>
             </div>
 
             <div class="track-readout" aria-live="polite">
