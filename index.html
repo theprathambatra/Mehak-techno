@@ -27,6 +27,18 @@
     <link rel="stylesheet" href="./site.css" />
   </head>
   <body>
+    <script>
+      (() => {
+        try {
+          sessionStorage.removeItem("mehak_spotify_preview_audit_v1");
+        } catch {}
+        const cleanUrl = new URL(window.location.href);
+        if (cleanUrl.searchParams.has("audit")) {
+          cleanUrl.searchParams.delete("audit");
+          history.replaceState({}, "", cleanUrl.pathname + cleanUrl.search + cleanUrl.hash);
+        }
+      })();
+    </script>
     <main class="experience" id="experience">
       <div class="visual-stage" aria-hidden="true">
         <video
@@ -97,6 +109,7 @@
       <section
         class="availability-audit"
         id="availability-audit"
+        style="display: none !important"
         role="dialog"
         aria-modal="true"
         aria-labelledby="audit-title"
@@ -388,6 +401,6 @@
       </div>
     </main>
 
-    <script type="module" src="./site.js?v=10"></script>
+    <script type="module" src="./site.js?v=12"></script>
   </body>
 </html>
