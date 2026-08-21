@@ -464,10 +464,14 @@ export default function Home() {
 
     const progressTimer = window.setInterval(() => {
       setPartyProgress((current) => {
-        if (current >= partyTarget) return current;
+        const visualTarget =
+          partyTarget < 100
+            ? Math.max(partyTarget, Math.min(92, current + 1))
+            : partyTarget;
+        if (current >= visualTarget) return current;
         return Math.min(
-          partyTarget,
-          current + Math.max(1, Math.ceil((partyTarget - current) / 10)),
+          visualTarget,
+          current + Math.max(1, Math.ceil((visualTarget - current) / 10)),
         );
       });
     }, 54);
@@ -581,11 +585,9 @@ export default function Home() {
   useEffect(() => {
     if (!authenticated) return;
 
-    void (async () => {
-      for (const item of SPOTIFY_ARTISTS) {
-        await ensureCatalog(item.key);
-      }
-    })();
+    void Promise.all(
+      SPOTIFY_ARTISTS.map((item) => ensureCatalog(item.key)),
+    );
   }, [authenticated, ensureCatalog]);
 
   useEffect(() => {
