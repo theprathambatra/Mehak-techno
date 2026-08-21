@@ -214,10 +214,14 @@ function compactNumber(value: number) {
 export default function Home() {
   const [auditMode, setAuditMode] = useState(() => {
     if (typeof window === "undefined") return false;
-    const requested =
-      new URLSearchParams(window.location.search).get("audit") === "1";
+    const parameters = new URLSearchParams(window.location.search);
+    const requested = parameters.get("audit") === "1";
+    const returningFromSpotify =
+      sessionStorage.getItem(AUDIT_MODE_KEY) === "1" &&
+      (parameters.has("code") || parameters.has("error"));
     if (requested) sessionStorage.setItem(AUDIT_MODE_KEY, "1");
-    return requested || sessionStorage.getItem(AUDIT_MODE_KEY) === "1";
+    else if (!returningFromSpotify) sessionStorage.removeItem(AUDIT_MODE_KEY);
+    return requested || returningFromSpotify;
   });
   const [entered, setEntered] = useState(
     () =>
