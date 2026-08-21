@@ -3,7 +3,7 @@ const VERIFIER_STORAGE_KEY = "mehak_spotify_pkce_verifier";
 const STATE_STORAGE_KEY = "mehak_spotify_oauth_state";
 const REDIRECT_STORAGE_KEY = "mehak_spotify_redirect_uri";
 const PENDING_ROOM_KEY = "mehak_spotify_pending_room";
-const CATALOG_CACHE_VERSION = 2;
+const CATALOG_CACHE_VERSION = 3;
 const CATALOG_CACHE_TTL = 24 * 60 * 60 * 1000;
 
 export const SPOTIFY_CLIENT_ID = "d7993980b50b4617908c37aa3c3d3692";
@@ -34,6 +34,7 @@ export type CatalogTrack = {
   durationMs: number;
   explicit: boolean;
   id: string;
+  previewUrl: string | null;
   releaseDate: string;
   spotifyUrl: string;
   title: string;
@@ -85,6 +86,7 @@ type SpotifyTrack = {
   id: string;
   is_playable?: boolean;
   name: string;
+  preview_url?: string | null;
   track_number: number;
   uri: string;
 };
@@ -497,6 +499,7 @@ export async function fetchArtistCatalog(
       durationMs: track.duration_ms,
       explicit: track.explicit,
       id: track.id,
+      previewUrl: track.preview_url ?? null,
       releaseDate: album.release_date || "9999",
       spotifyUrl:
         track.external_urls?.spotify ??
