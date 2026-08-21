@@ -3,15 +3,15 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Built for Mehak's Love for Techno</title>
+    <title>Mehak's Private Frequency</title>
     <meta
       name="description"
-      content="A private, immersive techno listening room built for Mehak."
+      content="Mac's private, immersive techno listening room made for Mehak."
     />
-    <meta property="og:title" content="Built for Mehak's Love for Techno" />
+    <meta property="og:title" content="Mehak's Private Frequency" />
     <meta
       property="og:description"
-      content="A private techno transmission built for Mehak."
+      content="Mac's private techno listening room, tuned only for Mehak."
     />
     <meta
       property="og:image"
@@ -23,10 +23,7 @@
       content="https://theprathambatra.github.io/Mehak-techno/"
     />
     <meta name="twitter:card" content="summary_large_image" />
-    <link
-      rel="icon"
-      href="./public/favicon.svg"
-    />
+    <link rel="icon" href="./public/favicon.svg" />
     <link rel="stylesheet" href="./site.css" />
   </head>
   <body>
@@ -41,93 +38,193 @@
           preload="auto"
           poster="./public/spiral-poster.jpg"
         >
-          <source
-            src="./public/spiral.mp4"
-            type="video/mp4"
-          />
+          <source src="./public/spiral.mp4" type="video/mp4" />
         </video>
         <div class="projection-wash"></div>
       </div>
 
-      <div class="light-beam light-beam-one" aria-hidden="true"></div>
-      <div class="light-beam light-beam-two" aria-hidden="true"></div>
+      <div class="ambient-beam ambient-beam-one" aria-hidden="true"></div>
+      <div class="ambient-beam ambient-beam-two" aria-hidden="true"></div>
+      <div class="laser-show" id="laser-show" aria-hidden="true"></div>
       <div class="scanlines" aria-hidden="true"></div>
       <div class="grain" aria-hidden="true"></div>
       <div class="cursor-light" aria-hidden="true"></div>
 
       <header class="topbar">
-        <p>MEHAK / TECHNO ARCHIVE</p>
-        <p class="topbar-center">PRIVATE TRANSMISSION 001</p>
+        <p class="room-name">
+          <span class="room-monogram">M</span>
+          MAC'S PRIVATE LISTENING ROOM
+        </p>
+
+        <button
+          class="environment-strip"
+          id="environment-strip"
+          type="button"
+          aria-label="Refresh local date, time and weather"
+        >
+          <span id="local-date">SYNCING DATE</span>
+          <strong id="local-time">--:--:--</strong>
+          <span class="weather-copy" id="local-weather">LOCAL WEATHER</span>
+        </button>
+
         <p class="signal-label">
           <span class="signal" id="signal"></span>
-          <span id="signal-text">CONNECTING</span>
+          <span id="signal-copy">TUNING IN</span>
         </p>
       </header>
 
       <div class="content-grid">
         <section class="title-block" aria-labelledby="main-title">
-          <p class="eyebrow">A LOVE LETTER AT 130 BPM</p>
-          <h1 id="main-title">
-            <span>BUILT FOR</span>
-            <span>MEHAK'S LOVE</span>
-            <span>FOR TECHNO</span>
+          <p class="eyebrow">
+            <span aria-hidden="true"></span>
+            YOUR TASTE DESERVED SOMETHING SPECIAL
+          </p>
+
+          <h1 id="main-title" class="kinetic-title">
+            <span class="title-line title-mehak" data-echo="MEHAK'S">MEHAK'S</span>
+            <span class="title-line title-private" data-echo="PRIVATE">PRIVATE</span>
+            <span class="title-line title-frequency" data-echo="FREQUENCY">FREQUENCY</span>
           </h1>
-          <div class="title-rule">
-            <span></span>
-            <p>SELECTED FREQUENCIES / NO INTERRUPTIONS</p>
+
+          <div class="hero-actions">
+            <button class="laser-button" id="laser-button" type="button">
+              <span class="laser-button-icon" aria-hidden="true">
+                <i></i><i></i><i></i>
+              </span>
+              SHOOT LASERS
+              <span class="rgb-tag">RGB</span>
+            </button>
+            <p>MOVE YOUR CURSOR · TURN IT UP · STAY AWHILE</p>
           </div>
         </section>
 
-        <section class="player-console" aria-label="Mehak's techno playlist">
-          <div class="console-header">
+        <section class="jukebox" aria-label="Mehak's techno jukebox">
+          <div class="jukebox-header">
             <div>
-              <span class="console-kicker">NOW TRANSMITTING</span>
-              <p>MEHAK'S TECHNO PLAYLIST</p>
+              <span>MEHAK'S JUKEBOX</span>
+              <p>HANDPICKED FROM THE TECHNO PLAYLIST</p>
             </div>
-            <span class="console-index">01</span>
+            <span class="track-count">
+              <span id="track-number">01</span><i>/</i>06
+            </span>
           </div>
 
-          <div class="spotify-shell" id="spotify-shell">
-            <div id="spotify-embed" class="spotify-mount"></div>
+          <div class="jukebox-body">
+            <div class="record-bay" aria-hidden="true">
+              <div class="record" id="record">
+                <span class="record-groove groove-one"></span>
+                <span class="record-groove groove-two"></span>
+                <span class="record-label">M</span>
+              </div>
+              <div class="tonearm" id="tonearm"><span></span></div>
+            </div>
+
+            <div class="track-readout" aria-live="polite">
+              <span class="now-playing-label" id="now-playing-label">READY TO SPIN</span>
+              <h2 id="track-title">Vois sur ton chemin</h2>
+              <p id="track-meta">BENNETT <span>·</span> TECHNO MIX</p>
+
+              <div class="progress-rail" aria-hidden="true">
+                <span id="progress-fill" style="width: 0%"></span>
+              </div>
+              <div class="time-row">
+                <span id="elapsed-time">0:00</span>
+                <span id="duration-time">2:58</span>
+              </div>
+
+              <div class="equalizer" id="equalizer">
+                <i style="--bar-delay: 0ms"></i>
+                <i style="--bar-delay: -57ms"></i>
+                <i style="--bar-delay: -114ms"></i>
+                <i style="--bar-delay: -171ms"></i>
+                <i style="--bar-delay: -228ms"></i>
+                <i style="--bar-delay: -285ms"></i>
+                <i style="--bar-delay: -342ms"></i>
+                <i style="--bar-delay: -399ms"></i>
+                <i style="--bar-delay: -456ms"></i>
+                <i style="--bar-delay: -513ms"></i>
+                <i style="--bar-delay: -570ms"></i>
+                <i style="--bar-delay: -627ms"></i>
+                <i style="--bar-delay: -684ms"></i>
+                <i style="--bar-delay: -741ms"></i>
+              </div>
+            </div>
           </div>
 
-          <div class="console-footer">
-            <span>SPOTIFY EMBED</span>
+          <div class="jukebox-controls">
+            <button
+              type="button"
+              class="skip-button"
+              id="previous-button"
+              disabled
+              aria-label="Previous jukebox track"
+            >
+              <span class="skip-glyph is-previous" aria-hidden="true"><i></i><b></b></span>
+              <small>PREV</small>
+            </button>
+
+            <button
+              type="button"
+              class="playback-button"
+              id="playback-button"
+              disabled
+              aria-label="Play jukebox"
+            >
+              <span class="play-glyph" id="playback-glyph" aria-hidden="true"><i></i><i></i></span>
+            </button>
+
+            <button
+              type="button"
+              class="skip-button"
+              id="next-button"
+              disabled
+              aria-label="Next jukebox track"
+            >
+              <span class="skip-glyph is-next" aria-hidden="true"><i></i><b></b></span>
+              <small>NEXT</small>
+            </button>
+          </div>
+
+          <div class="jukebox-footer">
+            <span>
+              <i class="online-dot is-waiting" id="online-dot"></i>
+              <span id="jukebox-status">TUNING JUKEBOX</span>
+            </span>
             <a
               href="https://open.spotify.com/playlist/18vUeZ9BdtMRNV6gI8RnR6"
               target="_blank"
               rel="noreferrer"
             >
-              OPEN PLAYLIST <span aria-hidden="true">↗</span>
+              FULL PLAYLIST ON SPOTIFY <span aria-hidden="true">↗</span>
             </a>
           </div>
+
+          <div id="spotify-embed" class="spotify-engine" aria-hidden="true"></div>
         </section>
       </div>
 
       <div class="entry-gate" id="entry-gate">
-        <p class="gate-label">PRIVATE LISTENING ROOM</p>
+        <p class="gate-label">MAC'S PRIVATE LISTENING ROOM</p>
+        <div class="gate-frequency" aria-hidden="true">130.00 <span>FM</span></div>
         <button
           class="enter-button"
           id="enter-button"
           type="button"
           disabled
           aria-busy="true"
-          aria-label="Play Mehak's techno playlist and enter"
+          aria-label="Play Mehak's techno jukebox and enter"
         >
           <span class="button-orbit" aria-hidden="true"></span>
           <span class="play-mark" aria-hidden="true"></span>
           <span class="play-word">PLAY</span>
         </button>
         <p class="gate-note">
-          SOUND ON <span aria-hidden="true">•</span> BEST EXPERIENCED FULL SCREEN
+          ONE CLICK OPENS THE ROOM <span aria-hidden="true">·</span> SOUND ON
         </p>
       </div>
     </main>
 
     <script src="./site.js"></script>
-    <script
-      src="https://open.spotify.com/embed/iframe-api/v1"
-      async
-    ></script>
+    <script src="https://open.spotify.com/embed/iframe-api/v1" async></script>
   </body>
 </html>
