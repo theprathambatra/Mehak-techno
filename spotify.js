@@ -6,7 +6,7 @@ var REDIRECT_STORAGE_KEY = "mehak_spotify_redirect_uri";
 var PENDING_ROOM_KEY = "mehak_spotify_pending_room";
 var CATALOG_CACHE_VERSION = 3;
 var CATALOG_CACHE_TTL = 30 * 24 * 60 * 60 * 1e3;
-var SPOTIFY_MAX_RATE_LIMIT_RETRIES = 10;
+var SPOTIFY_MAX_RATE_LIMIT_RETRIES = 2;
 var SPOTIFY_ALBUM_BATCH_SIZE = 20;
 var SPOTIFY_CLIENT_ID = "d7993980b50b4617908c37aa3c3d3692";
 var SPOTIFY_ARTISTS = [
@@ -222,9 +222,18 @@ async function spotifyApi(url, init = {}, attempt = 0, forceRefresh = false) {
       continue;
     }
     if (response.status === 429 && currentAttempt < SPOTIFY_MAX_RATE_LIMIT_RETRIES) {
+      let quotaReason = "";
+      try {
+        const payload = await response.clone().json();
+        quotaReason = payload.error?.reason ?? "";
+      } catch {
+      }
       const headerValue = Number(response.headers.get("Retry-After"));
       const retryAfterSeconds = Number.isFinite(headerValue) && headerValue > 0 ? Math.ceil(headerValue) : Math.min(30, 2 ** (currentAttempt + 1));
       announceSpotifyCooldown(retryAfterSeconds, currentAttempt + 1);
+      if (quotaReason === "QUOTA_EXCEEDED" || retryAfterSeconds > 8) {
+        throw new Error("Spotify quota busy · tap start the party");
+      }
       await wait(retryAfterSeconds * 1e3 + Math.round(Math.random() * 250));
       currentAttempt += 1;
       continue;
