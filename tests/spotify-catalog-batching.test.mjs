@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   fetchArtistCatalog,
   SPOTIFY_ARTISTS,
+  spotifyApi,
 } from "../github-pages/spotify.js";
 
 class MemoryStorage {
@@ -22,9 +23,12 @@ class MemoryStorage {
   }
 }
 
-function jsonResponse(payload, status = 200) {
+function jsonResponse(payload, status = 200, headerValues = {}) {
   return {
-    headers: { get: () => null },
+    clone: () => jsonResponse(payload, status, headerValues),
+    headers: {
+      get: (name) => headerValues[name.toLowerCase()] ?? null,
+    },
     json: async () => payload,
     ok: status >= 200 && status < 300,
     status,
@@ -128,4 +132,49 @@ test("artist catalogs use twenty-album batches instead of one request per releas
   assert.equal(requestCounts.releasePages, 5);
   assert.equal(requestCounts.albumBatches, 3);
   assert.equal(requestCounts.albumTrackRequests, 0);
+});
+
+test("quota exhaustion fails fast instead of trapping the startup curtain", async () => {
+  globalThis.localStorage = new MemoryStorage();
+  globalThis.localStorage.setItem(
+    "mehak_spotify_token_v1",
+    JSON.stringify({
+      accessToken: "test-token",
+      expiresAt: Date.now() + 3_600_000,
+      refreshToken: "test-refresh",
+      scope: "streaming",
+    }),
+  );
+  globalThis.window = {
+    dispatchEvent: () => true,
+    setTimeout,
+  };
+  globalThis.CustomEvent = class CustomEvent {
+    constructor(type, init) {
+      this.detail = init?.detail;
+      this.type = type;
+    }
+  };
+
+  let requests = 0;
+  globalThis.fetch = async () => {
+    requests += 1;
+    return jsonResponse(
+      {
+        error: {
+          message: "Too many requests",
+          reason: "QUOTA_EXCEEDED",
+          status: 429,
+        },
+      },
+      429,
+      { "retry-after": "60" },
+    );
+  };
+
+  await assert.rejects(
+    spotifyApi("https://api.spotify.com/v1/artists/test/albums"),
+    /quota busy/i,
+  );
+  assert.equal(requests, 1);
 });

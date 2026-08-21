@@ -5,7 +5,7 @@ const REDIRECT_STORAGE_KEY = "mehak_spotify_redirect_uri";
 const PENDING_ROOM_KEY = "mehak_spotify_pending_room";
 const CATALOG_CACHE_VERSION = 3;
 const CATALOG_CACHE_TTL = 30 * 24 * 60 * 60 * 1000;
-const SPOTIFY_MAX_RATE_LIMIT_RETRIES = 10;
+const SPOTIFY_MAX_RATE_LIMIT_RETRIES = 2;
 const SPOTIFY_ALBUM_BATCH_SIZE = 20;
 
 export const SPOTIFY_CLIENT_ID = "d7993980b50b4617908c37aa3c3d3692";
@@ -348,12 +348,24 @@ export async function spotifyApi<T>(
       response.status === 429 &&
       currentAttempt < SPOTIFY_MAX_RATE_LIMIT_RETRIES
     ) {
+      let quotaReason = "";
+      try {
+        const payload = (await response.clone().json()) as {
+          error?: { reason?: string };
+        };
+        quotaReason = payload.error?.reason ?? "";
+      } catch {
+        // Some rate-limit responses have no JSON body.
+      }
       const headerValue = Number(response.headers.get("Retry-After"));
       const retryAfterSeconds =
         Number.isFinite(headerValue) && headerValue > 0
           ? Math.ceil(headerValue)
           : Math.min(30, 2 ** (currentAttempt + 1));
       announceSpotifyCooldown(retryAfterSeconds, currentAttempt + 1);
+      if (quotaReason === "QUOTA_EXCEEDED" || retryAfterSeconds > 8) {
+        throw new Error("Spotify quota busy · tap start the party");
+      }
       await wait(retryAfterSeconds * 1000 + Math.round(Math.random() * 250));
       currentAttempt += 1;
       continue;
