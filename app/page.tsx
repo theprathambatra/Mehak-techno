@@ -92,7 +92,9 @@ type SpotifyPlayer = {
   addListener: (event: string, callback: (payload: unknown) => void) => boolean;
   connect: () => Promise<boolean>;
   disconnect: () => void;
+  nextTrack: () => Promise<void>;
   pause: () => Promise<void>;
+  previousTrack: () => Promise<void>;
   resume: () => Promise<void>;
 };
 
@@ -247,6 +249,7 @@ export default function Home() {
   const [artistProgress, setArtistProgress] = useState<
     Partial<Record<ArtistKey, number>>
   >({});
+  const [liveTrack, setLiveTrack] = useState<SpotifyWebPlaybackTrack | null>(null);
   const [partyProgress, setPartyProgress] = useState(0);
   const [partyOverlayDismissed, setPartyOverlayDismissed] = useState(false);
   const [autoLaunchAttempted, setAutoLaunchAttempted] = useState(false);
@@ -570,6 +573,10 @@ export default function Home() {
     } catch (error) {
       const message =
         error instanceof Error ? error.message.toUpperCase() : "CATALOG OFFLINE";
+      console.warn("[spotify:catalog] archive sync deferred", {
+        artist: key,
+        message,
+      });
       setCatalogProgress((progress) => ({ ...progress, [key]: message }));
       setPlayerMessage(message);
       if (/SESSION|CONNECT/.test(message)) {
@@ -642,16 +649,18 @@ export default function Home() {
             (item) => item.uri === state.track_window.current_track.uri,
           );
 
+          setLiveTrack(state.track_window.current_track);
+          setDurationMs(state.duration);
+          durationRef.current = state.duration;
+          setProgressMs(state.position);
+          progressAnchorRef.current = {
+            at: performance.now(),
+            position: state.position,
+          };
+          setSpotifyPlaying(!state.paused);
+
           if (index >= 0 && activeArtistRef.current === playingArtist) {
             setCurrentTrack(index);
-            setDurationMs(state.duration);
-            durationRef.current = state.duration;
-            setProgressMs(state.position);
-            progressAnchorRef.current = {
-              at: performance.now(),
-              position: state.position,
-            };
-            setSpotifyPlaying(!state.paused);
             setPlayerMessage(
               state.paused
                 ? `${catalog.length} TRACKS · PAUSED`
@@ -675,6 +684,15 @@ export default function Home() {
                 });
               }, 120);
             }
+          } else if (activeArtistRef.current === playingArtist) {
+            const artistName =
+              SPOTIFY_ARTISTS.find((item) => item.key === playingArtist)?.name ??
+              "SPOTIFY";
+            setPlayerMessage(
+              state.paused
+                ? `${artistName} · PAUSED`
+                : `${artistName} · PLAYING WHILE ARCHIVE SYNC CONTINUES`,
+            );
           }
 
           previousStateRef.current = state;
@@ -742,6 +760,58 @@ export default function Home() {
     }, 250);
     return () => window.clearInterval(ticker);
   }, [spotifyPlaying]);
+
+  const playArtistContext = useCallback(
+    async (key: ArtistKey) => {
+      if (!authenticated) {
+        await beginSpotifyAuthorization(key);
+        return false;
+      }
+      const player = playerRef.current;
+      const deviceId = deviceIdRef.current;
+      if (!player || !deviceId) {
+        setPlayerMessage("PLAYER IS STILL WARMING UP");
+        return false;
+      }
+
+      const selected = SPOTIFY_ARTISTS.find((item) => item.key === key)!;
+      try {
+        await player.activateElement();
+        playingArtistRef.current = key;
+        setPlayerMessage(`${selected.name} · STARTING NOW`);
+        await spotifyApi<void>(
+          `https://api.spotify.com/v1/me/player/play?device_id=${encodeURIComponent(deviceId)}`,
+          {
+            method: "PUT",
+            body: JSON.stringify({
+              context_uri: `spotify:artist:${selected.id}`,
+              position_ms: 0,
+            }),
+          },
+        );
+        setPartyProgress(100);
+        void spotifyApi<void>(
+          `https://api.spotify.com/v1/me/player/shuffle?state=false&device_id=${encodeURIComponent(deviceId)}`,
+          { method: "PUT" },
+        ).catch(() => {});
+        return true;
+      } catch (error) {
+        setSpotifyPlaying(false);
+        setPartyProgress(100);
+        console.warn("[spotify:playback] artist context could not start", {
+          artist: key,
+          message: error instanceof Error ? error.message : String(error),
+        });
+        setPlayerMessage(
+          error instanceof Error
+            ? error.message.toUpperCase()
+            : "PLAYBACK NEEDS ANOTHER TAP",
+        );
+        return false;
+      }
+    },
+    [authenticated],
+  );
 
   const playQueueAt = useCallback(
     async (requestedIndex: number, requestedArtist?: ArtistKey) => {
@@ -819,8 +889,7 @@ export default function Home() {
       auditMode ||
       !authenticated ||
       !playerReady ||
-      !allCatalogsReady ||
-      partyProgress < 100 ||
+      partyProgress < 92 ||
       autoPartyLaunchRef.current
     ) {
       return;
@@ -828,10 +897,19 @@ export default function Home() {
 
     autoPartyLaunchRef.current = true;
     setAutoLaunchAttempted(true);
-    setPlayerMessage("100% · DROPPING THE NEEDLE");
+    setPlayerMessage(
+      allCatalogsReady
+        ? "100% · DROPPING THE NEEDLE"
+        : "ARCHIVE SYNC MOVED BACKSTAGE · STARTING MUSIC",
+    );
     const launchTimer = window.setTimeout(() => {
-      void playAtRef.current?.(0, activeArtistRef.current);
-    }, 520);
+      if (allCatalogsReady) {
+        setPartyProgress(100);
+        void playAtRef.current?.(0, activeArtistRef.current);
+      } else {
+        void playArtistContext(activeArtistRef.current);
+      }
+    }, 240);
 
     return () => window.clearTimeout(launchTimer);
   }, [
@@ -840,6 +918,7 @@ export default function Home() {
     authenticated,
     entered,
     partyProgress,
+    playArtistContext,
     playerReady,
   ]);
 
@@ -871,12 +950,32 @@ export default function Home() {
 
     if (
       playingArtistRef.current === selectedArtist &&
-      previousStateRef.current?.track_window.current_track.uri === track?.uri
+      previousStateRef.current &&
+      (!track ||
+        previousStateRef.current.track_window.current_track.uri === track.uri)
     ) {
       await playerRef.current.resume();
+    } else if (!activeCatalog.length) {
+      await playArtistContext(selectedArtist);
     } else {
       await playQueueAt(currentTrack, selectedArtist);
     }
+  };
+
+  const playPrevious = async () => {
+    if (activeCatalog.length) {
+      await playQueueAt(currentTrack - 1, selectedArtist);
+      return;
+    }
+    await playerRef.current?.previousTrack();
+  };
+
+  const playNext = async () => {
+    if (activeCatalog.length) {
+      await playQueueAt(currentTrack + 1, selectedArtist);
+      return;
+    }
+    await playerRef.current?.nextTrack();
   };
 
   const selectArtist = (key: ArtistKey) => {
@@ -885,6 +984,7 @@ export default function Home() {
     setSpotifyPlaying(false);
     setSelectedArtist(key);
     activeArtistRef.current = key;
+    setLiveTrack(null);
     sessionStorage.setItem("mehak_spotify_selected_artist", key);
     setCurrentTrack(0);
     setProgressMs(0);
@@ -1266,7 +1366,7 @@ export default function Home() {
       : catalogProgress[selectedArtist] ?? playerMessage;
   const autoplayNeedsTap =
     autoLaunchAttempted &&
-    /PRESS PLAY|ANOTHER TAP|AUTOPLAY|PLAYBACK|PLAYER COMMAND|RESTRICTION|FAILED|ERROR/.test(
+    /PRESS PLAY|ANOTHER TAP|AUTOPLAY|PLAYBACK|PLAYER COMMAND|RESTRICTION|FAILED|ERROR|QUOTA|TOO MANY|BUSY|FORBIDDEN|403|429/.test(
       playerMessage.toUpperCase(),
     );
   const partyLabel =
@@ -1282,11 +1382,17 @@ export default function Home() {
     (authenticated || authChecking) &&
     !partyOverlayDismissed &&
     !auditMode;
-  const displayTitle = track?.title ?? `${artist.name} FULL ARCHIVE`;
-  const displayArtist = track?.artists ?? "ALL UNIQUE CREDITED TRACKS";
+  const liveTrackUrl = liveTrack?.uri.startsWith("spotify:track:")
+    ? `https://open.spotify.com/track/${liveTrack.uri.slice("spotify:track:".length)}`
+    : artist.url;
+  const displayTitle = track?.title ?? liveTrack?.name ?? `${artist.name} FULL ARCHIVE`;
+  const displayArtist =
+    track?.artists ??
+    liveTrack?.artists.map((item) => item.name).join(" · ") ??
+    "ALL UNIQUE CREDITED TRACKS";
   const displayAlbum = track
     ? `${track.album} · ${track.releaseDate.slice(0, 4)}`
-    : "OLDEST TO NEWEST · FULL-LENGTH PLAYBACK";
+    : liveTrack?.album.name ?? "OLDEST TO NEWEST · FULL-LENGTH PLAYBACK";
   const playbackEnabled = !authChecking && (!authenticated || playerReady);
 
   return (
@@ -1648,9 +1754,13 @@ export default function Home() {
                       ? "READY · COMPLETE CATALOG"
                       : "BUILDING THE ARCHIVE"}
               </span>
-              {track ? (
+              {track || liveTrack ? (
                 <h2>
-                  <a href={track.spotifyUrl} target="_blank" rel="noreferrer">
+                  <a
+                    href={track?.spotifyUrl ?? liveTrackUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
                     {displayTitle}
                   </a>
                 </h2>
@@ -1686,8 +1796,8 @@ export default function Home() {
             <button
               type="button"
               className="skip-button"
-              onClick={() => void playQueueAt(currentTrack - 1, selectedArtist)}
-              disabled={!playerReady || !activeCatalog.length}
+              onClick={() => void playPrevious()}
+              disabled={!playerReady}
               aria-label="Previous jukebox track"
             >
               <span className="skip-glyph is-previous" aria-hidden="true">
@@ -1722,8 +1832,8 @@ export default function Home() {
             <button
               type="button"
               className="skip-button"
-              onClick={() => void playQueueAt(currentTrack + 1, selectedArtist)}
-              disabled={!playerReady || !activeCatalog.length}
+              onClick={() => void playNext()}
+              disabled={!playerReady}
               aria-label="Next jukebox track"
             >
               <span className="skip-glyph is-next" aria-hidden="true">
@@ -1747,7 +1857,7 @@ export default function Home() {
             </span>
             <a
               className="spotify-attribution"
-              href={track?.spotifyUrl ?? artist.url}
+              href={track?.spotifyUrl ?? liveTrackUrl}
               target="_blank"
               rel="noreferrer"
             >
