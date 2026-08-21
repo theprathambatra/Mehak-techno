@@ -307,6 +307,19 @@ const renderAudit = () => {
     `CROSS-ARTIST DUPLICATES · ${summary.duplicateEntriesAcrossArtists}`;
 };
 
+window.addEventListener("mehak:spotify-rate-limit", (event) => {
+  const seconds = Math.max(
+    1,
+    Math.ceil(event.detail?.retryAfterSeconds ?? 1),
+  );
+  const message = `SPOTIFY COOL-DOWN ${seconds}S · SCAN RESUMES AUTOMATICALLY`;
+  loadingCatalogs.forEach((key) => {
+    catalogProgress[key] = message;
+  });
+  setStatus(message);
+  renderAudit();
+});
+
 const getPartyTarget = () => {
   if (!authenticated) return 0;
   const allCatalogsReady = SPOTIFY_ARTISTS.every(
@@ -528,12 +541,14 @@ const ensureCatalog = async (key) => {
   try {
     const tracks = await fetchArtistCatalog(artist, (scan) => {
       artistProgress[key] = Math.max(artistProgress[key] ?? 0, scan.percent);
-      catalogProgress[key] =
+      const message =
         scan.phase === "cache"
           ? "ARCHIVE RESTORED"
           : scan.phase === "releases"
             ? `FINDING RELEASES ${compactNumber(scan.completed)}/${compactNumber(scan.total)}`
             : `CUTTING VINYL ${compactNumber(scan.completed)}/${compactNumber(scan.total)}`;
+      catalogProgress[key] = message;
+      playerMessage = message;
       if (selectedArtist === key) renderTrack();
       renderPartyCountdown();
     });
@@ -1282,9 +1297,9 @@ const initialize = async () => {
   if (!authenticated) return;
 
   if (!auditMode) void initializePlayer();
-  await Promise.all(
-    SPOTIFY_ARTISTS.map((artist) => ensureCatalog(artist.key)),
-  );
+  for (const artist of SPOTIFY_ARTISTS) {
+    await ensureCatalog(artist.key);
+  }
   renderAudit();
 };
 
